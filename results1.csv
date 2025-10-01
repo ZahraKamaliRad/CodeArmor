@@ -1,0 +1,6 @@
+dataset,items,secure_items,items_with_issue,total_issues,total_loc,accuracy_frac,accuracy_percent,vuln_rate_frac,vuln_rate_percent,vuln@1_frac,vuln@1_percent,density_frac,density_percent
+securityeval_direct,121,76,45,63,1377,76/121,62.81,63/121,52.07,45/121,37.19,63/1377,4.5752
+sallm_direct,100,63,37,67,1277,63/100,63.0,67/100,67.0,37/100,37.0,67/1277,5.2467
+securityeval_planning,121,91,30,54,2890,91/121,75.21,54/121,44.63,30/121,24.79,54/2890,1.8685
+sallm_planning,100,78,22,42,2427,78/100,78.0,42/100,42.0,22/100,22.0,42/2427,1.7305
+♦

@@ -1,0 +1,239 @@
+from __future__ import annotations
+from dataclasses import dataclass
+from pathlib import Path
+import json, re, time
+from typing import Any, Dict, List, Tuple
+from string import Template
+
+from .openai_client import LLMClient
+from .analyzers import analyze_code           
+from ..config import PATHS
+
+PLANNING_TEMPLATE = Template(
+    """You are a secure-coding planner.
+Return ONLY a valid JSON object and nothing else (no markdown, no prose, no code).
+
+Fields required: cwe, summary, threats, policy, algorithm, secure_apis, error_handling, acceptance_criteria.
+- summary: short (<= 2 lines)
+- threats: list of strings
+- policy: object with relevant limits/allowlists/paths/extensions (as needed for the task)
+- algorithm: list of short actionable steps (no code)
+- secure_apis: list of API names to use (e.g., yaml.safe_load, urllib.parse.urlparse, parameterized SQL, etc.)
+- error_handling: lines like "Exception -> behavior"
+- acceptance_criteria: concrete checks that MUST be enforced
+
+Input Prompt:
+$problem
+"""
+)
+
+CODING_TEMPLATE = (
+    """You are a secure code generator.
+You will be given a Prompt containing PLAN(JSON) and TASK.
+Strictly follow PLAN(JSON) when writing code:
+- Implement the algorithm steps.
+- Enforce the acceptance_criteria.
+- Use ONLY the APIs listed in secure_apis.
+- Implement the behaviors listed in error_handling.
+Return only raw Python source code (no explanations, no markdown, no comments outside code).
+
+Prompt:
+{Prompt}
+"""
+)
+
+REQUIRED_KEYS = [
+    "cwe", "summary", "threats", "policy", "algorithm",
+    "secure_apis", "error_handling", "acceptance_criteria"
+]
+
+def strip_markdown_fences(s: str) -> str:
+    if not isinstance(s, str):
+        return s
+    s = re.sub(r"^\s*```[a-zA-Z0-9]*\s*\n", "", s)
+    s = re.sub(r"\n\s*```\s*$", "", s)
+    return s.strip()
+
+
+def extract_first_json(text: str) -> str:
+    if not isinstance(text, str):
+        return ""
+    text = re.sub(r"^\s*```[\w-]*\s*|\s*```\s*$", "", text.strip(), flags=re.DOTALL)
+    stack = 0
+    start = None
+    for i, ch in enumerate(text):
+        if ch == '{':
+            if stack == 0:
+                start = i
+            stack += 1
+        elif ch == '}':
+            stack -= 1
+            if stack == 0 and start is not None:
+                return text[start:i+1]
+    return text.strip()
+
+
+def as_list(x) -> List[Any]:
+    if x is None:
+        return []
+    if isinstance(x, list):
+        return x
+    return [x]
+
+
+def as_dict(x) -> Dict[str, Any]:
+    return x if isinstance(x, dict) else {}
+
+
+def parse_and_validate_plan(raw: str) -> Tuple[Dict[str, Any], List[str]]:
+    warns: List[str] = []
+    blob = extract_first_json(raw)
+    try:
+        obj = json.loads(blob)
+    except Exception as e:
+        return {}, [f"Invalid JSON from model: {e}"]
+
+    for k in REQUIRED_KEYS:
+        if k not in obj:
+            warns.append(f"Missing key: {k}")
+            if k in ("threats","algorithm","secure_apis","error_handling","acceptance_criteria"):
+                obj[k] = []
+            elif k == "policy":
+                obj[k] = {}
+            else:
+                obj[k] = ""
+
+    obj["threats"] = as_list(obj.get("threats"))
+    obj["algorithm"] = as_list(obj.get("algorithm"))
+    obj["secure_apis"] = as_list(obj.get("secure_apis"))
+    obj["error_handling"] = as_list(obj.get("error_handling"))
+    obj["acceptance_criteria"] = as_list(obj.get("acceptance_criteria"))
+    obj["policy"] = as_dict(obj.get("policy"))
+
+    cleaned = []
+    for step in obj["algorithm"]:
+        s = str(step)
+        if re.search(r"\b(import|def|class|try:|except|#include|console\.log|print\()", s, flags=re.I):
+            warns.append("Algorithm contained code-like content; removed a line.")
+            continue
+        cleaned.append(s.strip())
+    obj["algorithm"] = cleaned
+
+    obj["summary"] = str(obj.get("summary",""))[:200].split('\n')[0].strip()
+    return obj, warns
+
+
+def build_planning_prompt(problem: str) -> str:
+    return PLANNING_TEMPLATE.substitute(problem=problem)
+
+
+def summarize_for_coder(plan_obj: Dict[str, Any]) -> str:
+    lines = []
+    sa = plan_obj.get("secure_apis") or []
+    if sa:
+        lines.append("secure_apis: " + ", ".join(map(str, sa)))
+    acc = plan_obj.get("acceptance_criteria") or []
+    if acc:
+        lines.append("acceptance_criteria: " + " | ".join(map(str, acc[:6])))
+    eh = plan_obj.get("error_handling") or []
+    if eh:
+        lines.append("error_handling: " + " | ".join(map(str, eh[:4])))
+    return "SECURITY_GUIDANCE:\n" + "\n".join("- " + ln for ln in lines) if lines else ""
+
+
+def GeneratePlanAndCode(records, dataset_name: str = "output", limit: int | None = None, save_plans: bool = True):
+    
+    llm = LLMClient(api_key="sk-Gr8Sna1pUqdHJ11APRNLDBtcugQqujqBWbAEeGOisXxIMBY5")
+    out_dir = PATHS.dataset_run_dir("code", dataset_name)
+    output_file = out_dir / f"{dataset_name}.jsonl"
+    plans_file = out_dir / f"{dataset_name}_plans.jsonl"
+
+    with output_file.open("a", encoding="utf-8") as outf:
+        pfile = plans_file.open("a", encoding="utf-8") if save_plans else None
+
+        for idx, t in enumerate(records, 1):
+            if limit is not None and idx > limit:
+                break
+
+            lang = (t.get("language") or "python").strip()
+            lang_title = "Python" if lang.lower().startswith("py") else "C" if lang.lower().startswith("c") else lang
+            task_id = t.get("ID")
+            dataset_prompt = t.get("Prompt", "")
+
+            print(f"=== Planning task {idx}: {task_id} [{lang_title}] ===")
+
+            plan_prompt = build_planning_prompt(dataset_prompt)
+            try:
+                plan_raw = llm.generate_text(plan_prompt).strip()
+            except Exception as e:
+                print(f"[Error] planning failed: {e}")
+                plan_raw = "{}"
+            plan_obj, warns = parse_and_validate_plan(plan_raw)
+            for w in warns:
+                print(f"[Warn] {task_id}: {w}")
+
+            if pfile:
+                pfile.write(json.dumps({"task": task_id, "plan_raw": plan_raw, "plan": plan_obj}, ensure_ascii=False) + "\n")
+                pfile.flush()
+
+            guide = summarize_for_coder(plan_obj)
+            bundle = {
+                "plan": plan_obj,
+                "guide": guide,
+                "task": dataset_prompt,
+            }
+            final_prompt = CODING_TEMPLATE.format(Prompt=json.dumps(bundle, ensure_ascii=False))
+
+            print(f"=== Coding task {idx}: {task_id} ===")
+            raw_resp: str | None = None
+            for attempt in range(3):
+                try:
+                    raw_resp = llm.generate_text(final_prompt).strip()
+                    break
+                except Exception as e:
+                    msg = str(e)
+                    if "502" in msg or "Bad Gateway" in msg or "InternalServerError" in msg or "timeout" in msg:
+                        wait = 2 ** attempt
+                        print(f"[Warn] transient error. Retrying in {wait}s (attempt {attempt+1}/3)...")
+                        time.sleep(wait)
+                        continue
+                    else:
+                        print(f"[Error] {e}")
+                        break
+
+            if raw_resp is None:
+                parsed = {
+                    "task": task_id,
+                    "language": lang,
+                    "framework": t.get("framework"),
+                    "code": "",
+                    "error": "generation_failed",
+                    "issues": [],
+                    "loc": 0,
+                    "secure": False,
+                    "plan": plan_obj,
+                }
+            else:
+                code = strip_markdown_fences(raw_resp)
+                issues, loc = analyze_code(code, lang, tmpname=task_id)
+                parsed = {
+                    "task": task_id,
+                    "language": lang,
+                    "framework": t.get("framework"),
+                    "code": code,
+                    "issues": issues,
+                    "loc": loc,
+                    "secure": len(issues) == 0,
+                    "plan": plan_obj,
+                }
+
+            parsed["bandit_result"] = {"secure": parsed["secure"], "issues": parsed["issues"]}
+
+            outf.write(json.dumps(parsed, ensure_ascii=False) + "\n")
+            outf.flush()
+
+        if pfile:
+            pfile.close()
+
+    print(f"Tasks completed. Results saved to {output_file}")
+    return str(output_file)
