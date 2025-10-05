@@ -5,7 +5,7 @@ from pathlib import Path
 from src.config import PATHS
 from src.data.base import get_dataset, to_direct_records
 from src.core.direct import GenerateCode
-from src.core.planning import GeneratePlanAndCode   
+from src.core.PCAR import GeneratePlanAndCode   
 
 def dataset_registered(name: str):
     module_map = {
