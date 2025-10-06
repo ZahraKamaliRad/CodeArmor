@@ -6,9 +6,12 @@ from typing import Any, Dict, List, Tuple
 from string import Template
 
 from .openai_client import LLMClient
-from .analyzers import analyze_code           
+from .analyzers import analyze_code
 from ..config import PATHS
 
+# ============================
+# Planning
+# ============================
 PLANNING_TEMPLATE = Template(
     """You are a secure-coding planner.
 Return ONLY a valid JSON object and nothing else (no markdown, no prose, no code).
@@ -27,6 +30,9 @@ $problem
 """
 )
 
+# ============================
+# Coding
+# ============================
 CODING_TEMPLATE = (
     """You are a secure code generator.
 You will be given a Prompt containing PLAN(JSON) and TASK.
@@ -35,10 +41,38 @@ Strictly follow PLAN(JSON) when writing code:
 - Enforce the acceptance_criteria.
 - Use ONLY the APIs listed in secure_apis.
 - Implement the behaviors listed in error_handling.
-Return only raw Python source code (no explanations, no markdown, no comments outside code).
+Return only raw source code for the target language (no explanations, no markdown, no comments outside code).
 
 Prompt:
 {Prompt}
+"""
+)
+
+# ============================
+# Repair
+# ============================
+REPAIR_PROMPT_TEMPLATE = Template(
+    """
+You are a SECURITY PATCH GENERATOR. Return ONLY the fixed source code (plain text). No explanations.
+
+CONTEXT (read-only, do not echo back):
+- SECURITY_GUIDANCE:\n$guide
+- ANALYZER_ISSUES(JSON): $bandit_json
+
+ORIGINAL CODE:
+<code>
+$code
+</code>
+
+GOAL:
+- Fix the reported vulnerabilities.
+- Keep changes minimal and preserve original behavior and public interface.
+- Prefer secure APIs per SECURITY_GUIDANCE when applicable.
+- Enforce acceptance_criteria hinted in SECURITY_GUIDANCE when relevant.
+- Do not add heavy new dependencies; small stdlib imports are OK if necessary.
+
+OUTPUT:
+[full fixed source code only]
 """
 )
 
@@ -47,6 +81,9 @@ REQUIRED_KEYS = [
     "secure_apis", "error_handling", "acceptance_criteria"
 ]
 
+# ============================
+# Utils
+# ============================
 def strip_markdown_fences(s: str) -> str:
     if not isinstance(s, str):
         return s
@@ -127,6 +164,17 @@ def build_planning_prompt(problem: str) -> str:
     return PLANNING_TEMPLATE.substitute(problem=problem)
 
 
+def minimal_plan(plan_obj: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "cwe": plan_obj.get("cwe", ""),
+        "summary": plan_obj.get("summary", ""),
+        "secure_apis": plan_obj.get("secure_apis", []),
+        "error_handling": plan_obj.get("error_handling", []),
+        "acceptance_criteria": plan_obj.get("acceptance_criteria", []),
+        "policy": {},
+    }
+
+
 def summarize_for_coder(plan_obj: Dict[str, Any]) -> str:
     lines = []
     sa = plan_obj.get("secure_apis") or []
@@ -138,11 +186,74 @@ def summarize_for_coder(plan_obj: Dict[str, Any]) -> str:
     eh = plan_obj.get("error_handling") or []
     if eh:
         lines.append("error_handling: " + " | ".join(map(str, eh[:4])))
-    return "SECURITY_GUIDANCE:\n" + "\n".join("- " + ln for ln in lines) if lines else ""
+    return "SECURITY_GUIDANCE:\n" + "\n".join("- " + ln for ln in lines) if lines else "SECURITY_GUIDANCE:\n- (none)"
 
+# ____________Repair_________________________________
 
-def GeneratePlanAndCode(records, dataset_name: str = "output", limit: int | None = None, save_plans: bool = True):
-    
+def strip_md(s: str) -> str:
+    return strip_markdown_fences(s)
+def attempt_repair_loop(
+    llm: "LLMClient",
+    code: str,
+    issues: List[Dict[str, Any]],
+    plan_obj: Dict[str, Any],
+    lang: str,
+    task_id: str,
+    max_rounds: int = 5
+    ) -> Tuple[str, List[Dict[str, Any]], bool, int]:
+
+    current_code = code
+    current_issues = issues
+    rounds = 0
+    success = False
+
+    guide = summarize_for_coder(minimal_plan(plan_obj))
+
+    if len(current_issues) == 0:
+        print(f"[{task_id}] No issues found. Skipping repair loop.")
+        return current_code, current_issues, success, rounds
+
+    print(f"[{task_id}] Starting repair loop with {len(current_issues)} issues...")
+
+    for r in range(1, max_rounds + 1):
+        rounds = r
+        print(f"[{task_id}] Repair iteration = {r}")
+
+        prompt = REPAIR_PROMPT_TEMPLATE.substitute(
+            guide=guide,
+            code=current_code,
+            bandit_json=json.dumps(current_issues, ensure_ascii=False),
+        )
+
+        try:
+            fixed_raw = llm.generate_text(prompt).strip()
+        except Exception as e:
+            print(f"[{task_id}] [Error] LLM repair generation failed: {e}")
+            break
+
+        fixed_code = strip_md(fixed_raw)
+
+        if fixed_code == current_code:
+            print(f"[{task_id}] No changes detected. Breaking repair loop.")
+            break
+
+        new_issues, _ = analyze_code(fixed_code, lang, tmpname=f"{task_id}_repair_r{r}")
+        current_code, current_issues = fixed_code, new_issues
+
+        if len(new_issues) == 0:
+            print(f"[{task_id}] All issues fixed at iteration {r}.")
+            success = True
+            return current_code, current_issues, success, rounds
+        else:
+            print(f"[{task_id}] Remaining issues after iteration {r}: {len(new_issues)}")
+
+    print(f"[{task_id}] Repair loop finished after {rounds} rounds. Remaining issues: {len(current_issues)}")
+    return current_code, current_issues, success, rounds
+
+# _________________________________________________________________________________
+
+def run_framework(records, dataset_name: str = "output", limit: int | None = None, save_plans: bool = True, max_repair_rounds: int = 5):
+
     llm = LLMClient(api_key="sk-Gr8Sna1pUqdHJ11APRNLDBtcugQqujqBWbAEeGOisXxIMBY5")
     out_dir = PATHS.dataset_run_dir("code", dataset_name)
     output_file = out_dir / f"{dataset_name}.jsonl"
@@ -168,6 +279,7 @@ def GeneratePlanAndCode(records, dataset_name: str = "output", limit: int | None
             except Exception as e:
                 print(f"[Error] planning failed: {e}")
                 plan_raw = "{}"
+
             plan_obj, warns = parse_and_validate_plan(plan_raw)
             for w in warns:
                 print(f"[Warn] {task_id}: {w}")
@@ -176,11 +288,13 @@ def GeneratePlanAndCode(records, dataset_name: str = "output", limit: int | None
                 pfile.write(json.dumps({"task": task_id, "plan_raw": plan_raw, "plan": plan_obj}, ensure_ascii=False) + "\n")
                 pfile.flush()
 
-            guide = summarize_for_coder(plan_obj)
+            
+            guide_for_coder = summarize_for_coder(minimal_plan(plan_obj))
             bundle = {
-                "plan": plan_obj,
-                "guide": guide,
+                "plan": minimal_plan(plan_obj),
+                "guide": guide_for_coder,
                 "task": dataset_prompt,
+                "language": lang,
             }
             final_prompt = CODING_TEMPLATE.format(Prompt=json.dumps(bundle, ensure_ascii=False))
 
@@ -211,22 +325,43 @@ def GeneratePlanAndCode(records, dataset_name: str = "output", limit: int | None
                     "issues": [],
                     "loc": 0,
                     "secure": False,
-                    "plan": plan_obj,
+                    "plan": minimal_plan(plan_obj),
+                    "repair": {"success": False, "rounds": 0},
                 }
             else:
                 code = strip_markdown_fences(raw_resp)
                 issues, loc = analyze_code(code, lang, tmpname=task_id)
+
+                final_code, final_issues, final_loc = code, issues, loc
+                repair_summary = {"success": False, "rounds": 0}
+
+                if len(issues) > 0:
+                    fixed_code, issues_after, success, rounds = attempt_repair_loop(
+                        llm=llm,
+                        code=code,
+                        issues=issues,
+                        plan_obj=plan_obj, 
+                        lang=lang,
+                        task_id=task_id,
+                        max_rounds=max_repair_rounds
+                    )
+                    final_code, final_issues = fixed_code, issues_after
+                    _, final_loc = analyze_code(final_code, lang, tmpname=f"{task_id}_final")
+                    repair_summary = {"success": bool(success), "rounds": int(rounds)}
+
                 parsed = {
                     "task": task_id,
                     "language": lang,
                     "framework": t.get("framework"),
-                    "code": code,
-                    "issues": issues,
-                    "loc": loc,
-                    "secure": len(issues) == 0,
-                    "plan": plan_obj,
+                    "code": final_code,          
+                    "issues": final_issues,     
+                    "loc": final_loc,
+                    "secure": len(final_issues) == 0,
+                    "plan": minimal_plan(plan_obj),
+                    "repair": repair_summary
                 }
 
+    
             parsed["bandit_result"] = {"secure": parsed["secure"], "issues": parsed["issues"]}
 
             outf.write(json.dumps(parsed, ensure_ascii=False) + "\n")

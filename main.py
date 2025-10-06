@@ -5,7 +5,7 @@ from pathlib import Path
 from src.config import PATHS
 from src.data.base import get_dataset, to_direct_records
 from src.core.direct import GenerateCode
-from src.core.planning import GeneratePlanAndCode   
+from src.core.PCAR import run_framework 
 
 def dataset_registered(name: str):
     module_map = {
@@ -44,11 +44,11 @@ def run_planning(dataset: str, filename: str, limit: int):
 
     ds = get_dataset(dataset, fpath)
     records = to_direct_records(ds)
-    GeneratePlanAndCode(records, dataset_name=f"{dataset}_planning", limit=limit, save_plans=True)
+    run_framework(records, dataset_name=f"{dataset}_planning", limit=limit, save_plans=True)
 
 def main():
     parser = argparse.ArgumentParser(description="Secure CodeGen CLI")
-    parser.add_argument("--mode", choices=["direct", "planning"], required=True)  # ← تغییر لیست
+    parser.add_argument("--mode", choices=["direct", "planning"], required=True) 
     parser.add_argument("--dataset", choices=["securityeval", "llmseceval", "sallm"], required=True)
     parser.add_argument("--file", required=True, help="dataset file name inside datasets/")
     parser.add_argument("--limit", type=int, default=None)
