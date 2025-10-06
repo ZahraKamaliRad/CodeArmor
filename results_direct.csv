@@ -1,2 +1,2 @@
 dataset,items,secure_items,items_with_issue,total_issues,total_loc,accuracy_frac,accuracy_percent,vuln_rate_frac,vuln_rate_percent,vuln@1_frac,vuln@1_percent,density_frac,density_percent
-securityeval_planning,121,116,5,10,2604,116/121,95.87,10/121,8.26,5/121,4.13,10/2604,0.384
+securityeval_direct,121,76,45,63,1377,76/121,62.81,63/121,52.07,45/121,37.19,'63/1377',4.5752
