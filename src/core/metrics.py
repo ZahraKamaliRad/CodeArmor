@@ -3,7 +3,7 @@ import csv
 from pathlib import Path
 from typing import Dict, List, Tuple, Any, Iterable
 
-NumberFrac = Tuple[int, int, float]  
+NumberFrac = Tuple[int, int, float]
 
 def safe_percent(num: int, den: int) -> float:
     return (num / den * 100.0) if den else 0.0
@@ -30,7 +30,7 @@ class MetricsCalculator:
             loc = self.extract_loc(rec)
             self.per_item.append({
                 "secure": bool(secure),
-                "issue_count": int(len(issues) if isinstance(issues, list) else (issues or 0)),
+                "issue_count": int(len(issues)),
                 "loc": int(loc),
             })
 
@@ -39,6 +39,7 @@ class MetricsCalculator:
         self.total_locs = sum(x["loc"] for x in self.per_item)
         self.secure_items = sum(1 for x in self.per_item if x["secure"])
         self.items_with_issue = sum(1 for x in self.per_item if x["issue_count"] > 0)
+
 
     def accuracy(self) -> NumberFrac:
         return (self.secure_items, self.n_items, safe_percent(self.secure_items, self.n_items))
@@ -57,8 +58,9 @@ class MetricsCalculator:
         vr = self.vulnerability_rate()
         v1 = self.vulnerability_at_1()
         den = self.density()
+
         return {
-            "dataset": self.path.stem,  
+            "dataset": self.path.stem,
             "items": self.n_items,
             "secure_items": self.secure_items,
             "items_with_issue": self.items_with_issue,
@@ -70,9 +72,10 @@ class MetricsCalculator:
             "vuln_rate_percent": round(vr[2], 2),
             "vuln@1_frac": f"{v1[0]}/{v1[1]}",
             "vuln@1_percent": round(v1[2], 2),
-            "density_frac": f"{den[0]}/{den[1]}",
+            "density_frac": f"'{den[0]}/{den[1]}'",
             "density_percent": round(den[2], 4),
         }
+
 
     def read_jsonl(self, path: Path):
         with path.open("r", encoding="utf-8") as f:
@@ -99,8 +102,15 @@ class MetricsCalculator:
 
         if issues is None:
             issues = []
-        if isinstance(issues, int):
+        elif isinstance(issues, int):
             issues = [None] * max(0, issues)
+        elif isinstance(issues, list):
+            pass
+        else:
+            if isinstance(issues, dict) and isinstance(issues.get("count"), int):
+                issues = [None] * max(0, int(issues["count"]))
+            else:
+                issues = []
 
         if secure is None:
             secure = (len(issues) == 0)
@@ -132,6 +142,7 @@ class MetricsCalculator:
         return sum(1 for ln in s.splitlines() if ln.strip())
 
 
+
 if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser(description="Compute security metrics from JSONL results.")
@@ -139,7 +150,7 @@ if __name__ == "__main__":
     ap.add_argument("--csv", help="Path to save results as CSV (optional).")
     args = ap.parse_args()
 
-    all_results = []
+    all_results: List[Dict[str, Any]] = []
     for f in args.files:
         mc = MetricsCalculator(f)
         summary = mc.summary()
@@ -148,9 +159,11 @@ if __name__ == "__main__":
     for res in all_results:
         print(res)
 
-    if args.csv:
+    if args.csv and all_results:
+        fieldnames = list(all_results[0].keys())
         with open(args.csv, "w", newline="", encoding="utf-8") as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=list(all_results[0].keys()))
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(all_results)
         print(f"\nResults saved to {args.csv}")
+# python metrics.py ..\..\outputs\code\securityeval_direct\securityeval_direct.jsonl ..\..\outputs\code\securityeval_planning\securityeval_planning.jsonl ..\..\outputs\code\securityeval_planning5\securityeval_planning.jsonl --csv ..\..\results_all.csv
