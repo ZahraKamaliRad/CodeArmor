@@ -166,4 +166,4 @@ if __name__ == "__main__":
             writer.writeheader()
             writer.writerows(all_results)
         print(f"\nResults saved to {args.csv}")
-# python metrics.py ..\..\outputs\code\securityeval_direct\securityeval_direct.jsonl ..\..\outputs\code\securityeval_planning\securityeval_planning.jsonl ..\..\outputs\code\securityeval_planning5\securityeval_planning.jsonl --csv ..\..\results_all.csv
+# python metrics.py ..\..\outputs\code\securityeval_direct\securityeval_direct.jsonl ..\..\outputs\code\securityeval_planning\securityeval_planning.jsonl ..\..\outputs\code\securityeval_planning5\securityeval_planning.jsonl ..\..\outputs\code\sallm_direct\sallm_direct.jsonl ..\..\outputs\code\sallm_planning\sallm_planning.jsonl ..\..\outputs\code\sallm_planning2\sallm_planning.jsonl --csv ..\..\results_all.csv
