@@ -199,7 +199,7 @@ def attempt_repair_loop(
     plan_obj: Dict[str, Any],
     lang: str,
     task_id: str,
-    max_rounds: int = 5
+    max_rounds: int = 1
     ) -> Tuple[str, List[Dict[str, Any]], bool, int]:
 
     current_code = code
@@ -252,7 +252,7 @@ def attempt_repair_loop(
 
 # _________________________________________________________________________________
 
-def run_framework(records, dataset_name: str = "output", limit: int | None = None, save_plans: bool = True, max_repair_rounds: int = 5):
+def run_framework(records, dataset_name: str = "output", limit: int | None = None, save_plans: bool = True, max_repair_rounds: int = 1):
 
     llm = LLMClient(api_key="sk-Gr8Sna1pUqdHJ11APRNLDBtcugQqujqBWbAEeGOisXxIMBY5")
     out_dir = PATHS.dataset_run_dir("code", dataset_name)
