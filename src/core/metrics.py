@@ -15,8 +15,10 @@ def first_present(d: Dict[str, Any], keys: Iterable[str]):
     return None
 
 class MetricsCalculator:
-    CODE_KEYS = ("code", "generated_code", "output", "prediction", "model_output", "solution", "model_code")
-
+    CODE_KEYS = (
+    "final_code",   
+    "code" 
+)
     def __init__(self, jsonl_path: str):
         self.path = Path(jsonl_path)
         if not self.path.exists():
@@ -140,9 +142,7 @@ class MetricsCalculator:
     @staticmethod
     def count_nonempty_lines(s: str) -> int:
         return sum(1 for ln in s.splitlines() if ln.strip())
-
-
-
+    
 if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser(description="Compute security metrics from JSONL results.")
@@ -166,4 +166,5 @@ if __name__ == "__main__":
             writer.writeheader()
             writer.writerows(all_results)
         print(f"\nResults saved to {args.csv}")
-# python metrics.py ..\..\outputs\code\securityeval_direct\securityeval_direct.jsonl ..\..\outputs\code\securityeval_planning\securityeval_planning.jsonl ..\..\outputs\code\securityeval_planning5\securityeval_planning.jsonl ..\..\outputs\code\sallm_direct\sallm_direct.jsonl ..\..\outputs\code\sallm_planning\sallm_planning.jsonl ..\..\outputs\code\sallm_planning2\sallm_planning.jsonl --csv ..\..\results_all.csv
+
+        
