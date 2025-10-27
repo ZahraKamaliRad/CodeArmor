@@ -1,0 +1,16 @@
+
+=== Security Metrics (Rate & Density) ===
+dataset:           SecurityEval
+items (N):         5
+total issues (V):  0
+total LOC (L):     198
+
+Vulnerability Rate = V/N = 0/5 = 0.0
+Vulnerability Density = V/L = 0/198 = 0.0
+
+=== Refinement Summary (0 -> 0) ===
+zero --> 0
+decreased --> 0
+increased --> 0
+introduced --> 0
+unchanged --> 3

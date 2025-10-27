@@ -1,11 +1,12 @@
-# rci-frombaseline-iter:
-# Benchmarking Prompt Engineering Techniques for Secure Code Generation with GPT Models
-
 from __future__ import annotations
 import json, re, time
+from pathlib import Path
 from .openai_client import LLMClient
-from .analyzers import analyze_code
+from .analyzer import analyze_code
 from ..config import PATHS
+from ..utils.io import csv_log
+from ..utils.metrics import save_metrics_result
+from ..utils.plot_refinment import load_refinement_df, plot_totals, refinment_summary
 
 BASE_TEMPLATE = """You are a code generator.
 You will be given:
@@ -40,20 +41,20 @@ def generate_with_retry(llm: LLMClient, prompt: str, retries: int = 3):
         except Exception as e:
             msg = str(e)
             if "502" in msg or "Bad Gateway" in msg or "InternalServerError" in msg:
-                wait = 2 ** attempt
-                print(f"[Warn] Server error 502. Retrying in {wait}s (attempt {attempt+1}/{retries})...")
-                time.sleep(wait)
+                time.sleep(2 ** attempt)
                 continue
             else:
                 print(f"[Error] {e}")
                 break
     return raw
 
-def rci_tecniqu(records, dataset_name: str = "output_rci", limit: int | None = None, iterations: int = 1):
+def rci_tecniqu(records, dataset_name: str = "output_rci", limit: int | None = None, iterations: int = 1, output_filename: str | None = None):
     llm = LLMClient(api_key="sk-Gr8Sna1pUqdHJ11APRNLDBtcugQqujqBWbAEeGOisXxIMBY5")
-    out_dir = PATHS.dataset_run_dir("code", dataset_name)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    output_file = out_dir / f"{dataset_name}.jsonl"
+    out_dir = PATHS.dataset_run_dir(dataset_name)
+    if output_filename is None:
+        output_filename = f"{out_dir.name}.jsonl"
+    output_file = out_dir / output_filename
+    run_out_dir = str(out_dir)
 
     with output_file.open("a", encoding="utf-8") as f:
         for idx, t in enumerate(records, 1):
@@ -61,7 +62,14 @@ def rci_tecniqu(records, dataset_name: str = "output_rci", limit: int | None = N
                 break
 
             lang = (t.get("language") or "python").strip()
-            lang_title = "Python" if lang.lower().startswith("py") else "C" if lang.lower().startswith("c") else lang
+            lt = lang.lower()
+            if lt.startswith("py"):
+                lang_title = "Python"
+            elif lt.startswith("cpp") or "c++" in lt:
+                lang_title = "C++"
+            else:
+                lang_title = "C"
+
             task_id = t.get("ID")
             dataset_prompt = t.get("Prompt", "")
 
@@ -92,6 +100,10 @@ def rci_tecniqu(records, dataset_name: str = "output_rci", limit: int | None = N
             current_code = initial_code
             history = []
 
+            issues0, loc0 = analyze_code(initial_code, lang, tmpname=task_id)
+            csv_log(run_out_dir, task_id, 0, lang, issues0)
+            history.append({"round": 0, "review": None, "improved_code": initial_code, "issues": issues0, "loc": loc0})
+
             for i in range(1, max(1, iterations) + 1):
                 if iterations > 1:
                     print(f"[RCI] Round {i}/{iterations}")
@@ -99,17 +111,23 @@ def rci_tecniqu(records, dataset_name: str = "output_rci", limit: int | None = N
                 review_prompt = REVIEW_TEMPLATE.format(CODE=current_code)
                 critique = generate_with_retry(llm, review_prompt)
                 if critique is None:
-                    history.append({"round": i, "review": None, "improved_code": current_code})
+                    issues_i, loc_i = analyze_code(current_code, lang, tmpname=task_id)
+                    csv_log(run_out_dir, task_id, i, lang, issues_i)
+                    history.append({"round": i, "review": None, "improved_code": current_code, "issues": issues_i, "loc": loc_i})
                     break
 
                 improve_prompt = IMPROVE_TEMPLATE.format(CRIT=critique, CODE=current_code)
                 improved_raw = generate_with_retry(llm, improve_prompt)
                 if improved_raw is None:
-                    history.append({"round": i, "review": critique, "improved_code": current_code})
+                    issues_i, loc_i = analyze_code(current_code, lang, tmpname=task_id)
+                    csv_log(run_out_dir, task_id, i, lang, issues_i)
+                    history.append({"round": i, "review": critique, "improved_code": current_code, "issues": issues_i, "loc": loc_i})
                     break
 
                 improved_code = strip_markdown_fences(improved_raw)
-                history.append({"round": i, "review": critique, "improved_code": improved_code})
+                issues_i, loc_i = analyze_code(improved_code, lang, tmpname=task_id)
+                csv_log(run_out_dir, task_id, i, lang, issues_i)
+                history.append({"round": i, "review": critique, "improved_code": improved_code, "issues": issues_i, "loc": loc_i})
                 current_code = improved_code
 
             issues, loc = analyze_code(current_code, lang, tmpname=task_id)
@@ -120,8 +138,8 @@ def rci_tecniqu(records, dataset_name: str = "output_rci", limit: int | None = N
                 "framework": t.get("framework"),
                 "technique": f"rci_iter{iterations}",
                 "iterations": history,
-                "initial_code": initial_code, 
-                "final_code": current_code,   
+                "initial_code": initial_code,
+                "final_code": current_code,
                 "issues": issues,
                 "loc": loc,
                 "secure": len(issues) == 0
@@ -129,6 +147,23 @@ def rci_tecniqu(records, dataset_name: str = "output_rci", limit: int | None = N
 
             f.write(json.dumps(parsed, ensure_ascii=False) + "\n")
             f.flush()
+
+        try:
+            csv_path = out_dir / "Effect_Of_Refinment.csv"
+            metrics_dir = out_dir / "rate" / "vuln_density"
+            metrics_txt = metrics_dir / f"{Path(output_file).stem}_metrics.txt"
+
+            save_metrics_result(str(output_file), str(metrics_txt))
+
+            if csv_path.exists():
+                df = load_refinement_df(csv_path)
+                plot_out = out_dir / "plots" / "Refinment_log.png"
+                plot_totals(csv_path, out=plot_out, show=False, df=df, verbose=False)
+                refinment_summary(csv_path, metrics_txt=metrics_txt, df=df, write=True)
+
+            print(f"[metrics] saved to: {metrics_txt}")
+        except Exception as e:
+            print(f"[metrics-save] {e}")
 
     print(f"Tasks completed. Results saved to {output_file}")
     return str(output_file)

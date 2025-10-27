@@ -1,4 +1,3 @@
-# src/config.py
 from dataclasses import dataclass
 from pathlib import Path
 import os
@@ -16,26 +15,24 @@ class Paths:
             self.datasets = self.root / "src" / "datasets"
         else:
             self.datasets = self.root / "datasets"
-
         self.outputs = self.root / "outputs"
 
     def ensure(self):
-        (self.outputs / "plan").mkdir(parents=True, exist_ok=True)
-        (self.outputs / "code").mkdir(parents=True, exist_ok=True)
-        (self.outputs / "prompts").mkdir(parents=True, exist_ok=True)
+        self.outputs.mkdir(parents=True, exist_ok=True)
         return self
 
-    def dataset_run_dir(self, category: str, dataset: str) -> Path:
-        base = self.outputs / category
-        base.mkdir(parents=True, exist_ok=True)
-
+    def dataset_run_dir(self, dataset: str) -> Path:
+        base = self.outputs
         run_dir = base / dataset
-        counter = 1
-        while run_dir.exists():
-            counter += 1
-            run_dir = base / f"{dataset}{counter}"
-        run_dir.mkdir(parents=True, exist_ok=True)
-        return run_dir
-
+        if not run_dir.exists():
+            run_dir.mkdir(parents=True, exist_ok=True)
+            return run_dir
+        i = 2
+        while True:
+            cand = base / f"{dataset}({i})"
+            if not cand.exists():
+                cand.mkdir(parents=True, exist_ok=True)
+                return cand
+            i += 1
 
 PATHS = Paths().ensure()

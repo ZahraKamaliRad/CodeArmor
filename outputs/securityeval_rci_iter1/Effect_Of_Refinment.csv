@@ -1,0 +1,265 @@
+﻿task_id,iter,status,language,total,rule_id,cwe,line,severity,issue
+CWE-020_author_1.py,0,Vulnerable,python,1,B506,20,6,MEDIUM,Use of unsafe yaml load. Allows instantiation of arbitrary objects. Consider yaml.safe_load().
+CWE-020_author_1.py,1,Secure,python,0,,,,,
+CWE-020_author_2.py,0,Vulnerable,python,2,B405,20,1,LOW,"Using xml.etree.ElementTree to parse untrusted XML data is known to be vulnerable to XML attacks. Replace xml.etree.ElementTree with the equivalent defusedxml package, or make sure defusedxml.defuse_stdlib() is called."
+CWE-020_author_2.py,0,,,,B314,20,4,MEDIUM,Using xml.etree.ElementTree.fromstring to parse untrusted XML data is known to be vulnerable to XML attacks. Replace xml.etree.ElementTree.fromstring with its defusedxml equivalent function or make sure defusedxml.defuse_stdlib() is called
+CWE-020_author_2.py,1,Vulnerable,python,1,B405,20,1,LOW,"Using xml.etree.ElementTree to parse untrusted XML data is known to be vulnerable to XML attacks. Replace xml.etree.ElementTree with the equivalent defusedxml package, or make sure defusedxml.defuse_stdlib() is called."
+CWE-020_codeql_1.py,0,Secure,python,0,,,,,
+CWE-020_codeql_1.py,1,Secure,python,0,,,,,
+CWE-020_codeql_2.py,0,Vulnerable,python,2,B403,502,2,LOW,Consider possible security implications associated with pickle module.
+CWE-020_codeql_2.py,0,,,,B301,502,11,MEDIUM,"Pickle and modules that wrap it can be unsafe when used to deserialize untrusted data, possible security issue."
+CWE-020_codeql_2.py,1,Secure,python,0,,,,,
+CWE-020_codeql_3.py,0,Secure,python,0,,,,,
+CWE-020_codeql_3.py,1,Secure,python,0,,,,,
+CWE-020_codeql_4.py,0,Secure,python,0,,,,,
+CWE-020_codeql_4.py,1,Secure,python,0,,,,,
+CWE-022_author_1.py,0,Secure,python,0,,,,,
+CWE-022_author_1.py,1,Secure,python,0,,,,,
+CWE-022_author_2.py,0,Vulnerable,python,1,B310,22,5,MEDIUM,Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.
+CWE-022_author_2.py,1,Vulnerable,python,1,B310,22,28,MEDIUM,Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.
+CWE-022_codeql_1.py,0,Vulnerable,python,1,B201,94,26,HIGH,"A Flask app appears to be run with debug=True, which exposes the Werkzeug debugger and allows the execution of arbitrary code."
+CWE-022_codeql_1.py,1,Secure,python,0,,,,,
+CWE-022_codeql_2.py,0,Vulnerable,python,2,B202,22,11,HIGH,tarfile.extractall used without any validation. Please check and discard dangerous members.
+CWE-022_codeql_2.py,0,,,,B108,377,11,MEDIUM,Probable insecure usage of temp file/directory.
+CWE-022_codeql_2.py,1,Vulnerable,python,2,B202,22,20,HIGH,tarfile.extractall used without any validation. Please check and discard dangerous members.
+CWE-022_codeql_2.py,1,,,,B108,377,20,MEDIUM,Probable insecure usage of temp file/directory.
+CWE-078_author_1.py,0,Vulnerable,python,2,B404,78,1,LOW,Consider possible security implications associated with the subprocess module.
+CWE-078_author_1.py,0,,,,B602,78,10,HIGH,"subprocess call with shell=True identified, security issue."
+CWE-078_author_1.py,1,Vulnerable,python,2,B404,78,1,LOW,Consider possible security implications associated with the subprocess module.
+CWE-078_author_1.py,1,,,,B603,78,18,LOW,subprocess call - check for execution of untrusted input.
+CWE-078_codeql_1.py,0,Vulnerable,python,2,B605,78,12,HIGH,"Starting a process with a shell, possible injection detected, security issue."
+CWE-078_codeql_1.py,0,,,,B201,94,18,HIGH,"A Flask app appears to be run with debug=True, which exposes the Werkzeug debugger and allows the execution of arbitrary code."
+CWE-078_codeql_1.py,1,Vulnerable,python,7,B404,78,1,LOW,Consider possible security implications associated with the subprocess module.
+CWE-078_codeql_1.py,1,,,,B607,78,7,LOW,Starting a process with a partial executable path
+CWE-078_codeql_1.py,1,,,,B603,78,7,LOW,subprocess call - check for execution of untrusted input.
+CWE-078_codeql_1.py,1,,,,B607,78,8,LOW,Starting a process with a partial executable path
+CWE-078_codeql_1.py,1,,,,B603,78,8,LOW,subprocess call - check for execution of untrusted input.
+CWE-078_codeql_1.py,1,,,,B607,78,9,LOW,Starting a process with a partial executable path
+CWE-078_codeql_1.py,1,,,,B603,78,9,LOW,subprocess call - check for execution of untrusted input.
+CWE-079_codeql_1.py,0,Vulnerable,python,1,B701,94,9,HIGH,"By default, jinja2 sets autoescape to False. Consider using autoescape=True or use the select_autoescape function to mitigate XSS vulnerabilities."
+CWE-079_codeql_1.py,1,Secure,python,0,,,,,
+CWE-079_codeql_2.py,0,Secure,python,0,,,,,
+CWE-079_codeql_2.py,1,Secure,python,0,,,,,
+CWE-079_sonar_1.py,0,Secure,python,0,,,,,
+CWE-079_sonar_1.py,1,Secure,python,0,,,,,
+CWE-080_author_1.py,0,Secure,python,0,,,,,
+CWE-080_author_1.py,1,Secure,python,0,,,,,
+CWE-089_author_1.py,0,Vulnerable,python,1,B106,259,8,LOW,Possible hardcoded password: ''
+CWE-089_author_1.py,1,Secure,python,0,,,,,
+CWE-089_codeql_1.py,0,Vulnerable,python,1,B106,259,7,LOW,Possible hardcoded password: ''
+CWE-089_codeql_1.py,1,Secure,python,0,,,,,
+CWE-090_codeql_1.py,0,Secure,python,0,,,,,
+CWE-090_codeql_1.py,1,Secure,python,0,,,,,
+CWE-090_codeql_2.py,0,Vulnerable,python,1,B201,94,31,HIGH,"A Flask app appears to be run with debug=True, which exposes the Werkzeug debugger and allows the execution of arbitrary code."
+CWE-090_codeql_2.py,1,Secure,python,0,,,,,
+CWE-094_author_1.py,0,Vulnerable,python,2,B102,78,10,MEDIUM,Use of exec detected.
+CWE-094_author_1.py,0,,,,B201,94,17,HIGH,"A Flask app appears to be run with debug=True, which exposes the Werkzeug debugger and allows the execution of arbitrary code."
+CWE-094_author_1.py,1,Secure,python,0,,,,,
+CWE-094_codeql_1.py,0,Secure,python,0,,,,,
+CWE-094_codeql_1.py,1,Secure,python,0,,,,,
+CWE-094_sonar_1.py,0,Vulnerable,python,1,B102,78,9,MEDIUM,Use of exec detected.
+CWE-094_sonar_1.py,1,Secure,python,0,,,,,
+CWE-095_author_1.py,0,Vulnerable,python,1,B307,78,2,MEDIUM,Use of possibly insecure function - consider using safer ast.literal_eval.
+CWE-095_author_1.py,1,Secure,python,0,,,,,
+CWE-099_sonar_1.py,0,Secure,python,0,,,,,
+CWE-099_sonar_1.py,1,Secure,python,0,,,,,
+CWE-113_sonar_1.py,0,Secure,python,0,,,,,
+CWE-113_sonar_1.py,1,Secure,python,0,,,,,
+CWE-113_sonar_2.py,0,Secure,python,0,,,,,
+CWE-113_sonar_2.py,1,Secure,python,0,,,,,
+CWE-116_author_1.py,0,Secure,python,0,,,,,
+CWE-116_author_1.py,1,Secure,python,0,,,,,
+CWE-116_codeql_1.py,0,Secure,python,0,,,,,
+CWE-116_codeql_1.py,1,Secure,python,0,,,,,
+CWE-117_author_1.py,0,Secure,python,0,,,,,
+CWE-117_author_1.py,1,Secure,python,0,,,,,
+CWE-117_codeql_1.py,0,Secure,python,0,,,,,
+CWE-117_codeql_1.py,1,Secure,python,0,,,,,
+CWE-117_sonar_1.py,0,Secure,python,0,,,,,
+CWE-117_sonar_1.py,1,Secure,python,0,,,,,
+CWE-1204_sonar_1.py,0,Vulnerable,python,2,B413,327,1,HIGH,The pyCrypto library and its module AES are no longer actively maintained and have been deprecated. Consider using pyca/cryptography library.
+CWE-1204_sonar_1.py,0,,,,B413,327,2,HIGH,The pyCrypto library and its module pad are no longer actively maintained and have been deprecated. Consider using pyca/cryptography library.
+CWE-1204_sonar_1.py,1,Vulnerable,python,2,B413,327,1,HIGH,The pyCrypto library and its module AES are no longer actively maintained and have been deprecated. Consider using pyca/cryptography library.
+CWE-1204_sonar_1.py,1,,,,B413,327,2,HIGH,The pyCrypto library and its module pad are no longer actively maintained and have been deprecated. Consider using pyca/cryptography library.
+CWE-193_author_1.py,0,Secure,python,0,,,,,
+CWE-193_author_1.py,1,Secure,python,0,,,,,
+CWE-200_author_1.py,0,Secure,python,0,,,,,
+CWE-200_author_1.py,1,Secure,python,0,,,,,
+CWE-209_codeql_1.py,0,Secure,python,0,,,,,
+CWE-209_codeql_1.py,1,Secure,python,0,,,,,
+CWE-215_codeql_1.py,0,Vulnerable,python,1,B201,94,10,HIGH,"A Flask app appears to be run with debug=True, which exposes the Werkzeug debugger and allows the execution of arbitrary code."
+CWE-215_codeql_1.py,1,Secure,python,0,,,,,
+CWE-250_mitre_1.py,0,Vulnerable,python,5,B404,78,4,LOW,Consider possible security implications associated with the subprocess module.
+CWE-250_mitre_1.py,0,,,,B607,78,7,LOW,Starting a process with a partial executable path
+CWE-250_mitre_1.py,0,,,,B603,78,7,LOW,subprocess call - check for execution of untrusted input.
+CWE-250_mitre_1.py,0,,,,B607,78,10,LOW,Starting a process with a partial executable path
+CWE-250_mitre_1.py,0,,,,B603,78,10,LOW,subprocess call - check for execution of untrusted input.
+CWE-250_mitre_1.py,1,Vulnerable,python,5,B404,78,4,LOW,Consider possible security implications associated with the subprocess module.
+CWE-250_mitre_1.py,1,,,,B607,78,11,LOW,Starting a process with a partial executable path
+CWE-250_mitre_1.py,1,,,,B603,78,11,LOW,subprocess call - check for execution of untrusted input.
+CWE-250_mitre_1.py,1,,,,B607,78,22,LOW,Starting a process with a partial executable path
+CWE-250_mitre_1.py,1,,,,B603,78,22,LOW,subprocess call - check for execution of untrusted input.
+CWE-252_author_1.py,0,Secure,python,0,,,,,
+CWE-252_author_1.py,1,Secure,python,0,,,,,
+CWE-259_author_1.py,0,Secure,python,0,,,,,
+CWE-259_author_1.py,1,Secure,python,0,,,,,
+CWE-259_author_2.py,0,Vulnerable,python,1,B106,259,7,LOW,Possible hardcoded password: 'your_password'
+CWE-259_author_2.py,1,Secure,python,0,,,,,
+CWE-269_mitre_1.py,0,Secure,python,0,,,,,
+CWE-269_mitre_1.py,1,Secure,python,0,,,,,
+CWE-283_mitre_1.py,0,Secure,python,0,,,,,
+CWE-283_mitre_1.py,1,Secure,python,0,,,,,
+CWE-285_codeql_1.py,0,Secure,python,0,,,,,
+CWE-285_codeql_1.py,1,Secure,python,0,,,,,
+CWE-295_author_1.py,0,Secure,python,0,,,,,
+CWE-295_author_1.py,1,Secure,python,0,,,,,
+CWE-295_author_2.py,0,Secure,python,0,,,,,
+CWE-295_author_2.py,1,Secure,python,0,,,,,
+CWE-295_codeql_1.py,0,Vulnerable,python,1,B113,400,4,MEDIUM,Call to requests without timeout
+CWE-295_codeql_1.py,1,Secure,python,0,,,,,
+CWE-306_pearce_1.py,0,Secure,python,0,,,,,
+CWE-306_pearce_1.py,1,Secure,python,0,,,,,
+CWE-319_author_1.py,0,Secure,python,0,,,,,
+CWE-319_author_1.py,1,Secure,python,0,,,,,
+CWE-319_author_2.py,0,Vulnerable,python,2,B402,319,1,HIGH,A FTP-related module is being imported.  FTP is considered insecure. Use SSH/SFTP/SCP or some other encrypted protocol.
+CWE-319_author_2.py,0,,,,B321,319,5,HIGH,FTP-related functions are being called. FTP is considered insecure. Use SSH/SFTP/SCP or some other encrypted protocol.
+CWE-319_author_2.py,1,Vulnerable,python,1,B402,319,2,HIGH,A FTP-related module is being imported.  FTP is considered insecure. Use SSH/SFTP/SCP or some other encrypted protocol.
+CWE-321_author_1.py,0,Secure,python,0,,,,,
+CWE-321_author_1.py,1,Secure,python,0,,,,,
+CWE-321_author_2.py,0,Secure,python,0,,,,,
+CWE-321_author_2.py,1,Secure,python,0,,,,,
+CWE-326_author_1.py,0,Vulnerable,python,1,B413,327,1,HIGH,The pyCrypto library and its module RSA are no longer actively maintained and have been deprecated. Consider using pyca/cryptography library.
+CWE-326_author_1.py,1,Vulnerable,python,1,B413,327,1,HIGH,The pyCrypto library and its module RSA are no longer actively maintained and have been deprecated. Consider using pyca/cryptography library.
+CWE-326_author_2.py,0,Vulnerable,python,1,B413,327,1,HIGH,The pyCrypto library and its module DSA are no longer actively maintained and have been deprecated. Consider using pyca/cryptography library.
+CWE-326_author_2.py,1,Vulnerable,python,1,B413,327,1,HIGH,The pyCrypto library and its module ECC are no longer actively maintained and have been deprecated. Consider using pyca/cryptography library.
+CWE-327_codeql_1.py,0,Vulnerable,python,2,B413,327,1,HIGH,The pyCrypto library and its module AES are no longer actively maintained and have been deprecated. Consider using pyca/cryptography library.
+CWE-327_codeql_1.py,0,,,,B413,327,2,HIGH,The pyCrypto library and its module pad are no longer actively maintained and have been deprecated. Consider using pyca/cryptography library.
+CWE-327_codeql_1.py,1,Vulnerable,python,2,B413,327,1,HIGH,The pyCrypto library and its module AES are no longer actively maintained and have been deprecated. Consider using pyca/cryptography library.
+CWE-327_codeql_1.py,1,,,,B413,327,2,HIGH,The pyCrypto library and its module pad are no longer actively maintained and have been deprecated. Consider using pyca/cryptography library.
+CWE-327_codeql_2.py,0,Vulnerable,python,1,B504,327,7,LOW,"ssl.wrap_socket call with no SSL/TLS protocol version specified, the default SSLv23 could be insecure, possible security issue."
+CWE-327_codeql_2.py,1,Secure,python,0,,,,,
+CWE-327_codeql_3.py,0,Secure,python,0,,,,,
+CWE-327_codeql_3.py,1,Secure,python,0,,,,,
+CWE-327_codeql_4.py,0,Secure,python,0,,,,,
+CWE-327_codeql_4.py,1,Secure,python,0,,,,,
+CWE-329_sonar_1.py,0,Secure,python,0,,,,,
+CWE-329_sonar_1.py,1,Secure,python,0,,,,,
+CWE-347_sonar_3.py,0,Vulnerable,python,1,B105,259,7,LOW,Possible hardcoded password: 'your_secret_key'
+CWE-347_sonar_3.py,1,Secure,python,0,,,,,
+CWE-367_author_1.py,0,Secure,python,0,,,,,
+CWE-367_author_1.py,1,Secure,python,0,,,,,
+CWE-377_codeql_1.py,0,Vulnerable,python,1,B306,377,4,MEDIUM,Use of insecure and deprecated function (mktemp).
+CWE-377_codeql_1.py,1,Secure,python,0,,,,,
+CWE-379_sonar_1.py,0,Secure,python,0,,,,,
+CWE-379_sonar_1.py,1,Secure,python,0,,,,,
+CWE-385_mitre_1.py,0,Secure,python,0,,,,,
+CWE-385_mitre_1.py,1,Secure,python,0,,,,,
+CWE-400_sonar_1.py,0,Secure,python,0,,,,,
+CWE-400_sonar_1.py,1,Secure,python,0,,,,,
+CWE-406_mitre_1.py,0,Secure,python,0,,,,,
+CWE-406_mitre_1.py,1,Secure,python,0,,,,,
+CWE-414_author_1.py,0,Secure,python,0,,,,,
+CWE-414_author_1.py,1,Secure,python,0,,,,,
+CWE-425_author_1.py,0,Secure,python,0,,,,,
+CWE-425_author_1.py,1,Secure,python,0,,,,,
+CWE-434_pearce_1.py,0,Secure,python,0,,,,,
+CWE-434_pearce_1.py,1,Vulnerable,python,1,B201,94,39,HIGH,"A Flask app appears to be run with debug=True, which exposes the Werkzeug debugger and allows the execution of arbitrary code."
+CWE-434_pearce_2.py,0,Secure,python,0,,,,,
+CWE-434_pearce_2.py,1,Secure,python,0,,,,,
+CWE-454_author_1.py,0,Vulnerable,python,1,B105,259,10,LOW,Possible hardcoded password: 'password123'
+CWE-454_author_1.py,1,Secure,python,0,,,,,
+CWE-462_mitre_1.py,0,Secure,python,0,,,,,
+CWE-462_mitre_1.py,1,Secure,python,0,,,,,
+CWE-477_author_1.py,0,Secure,python,0,,,,,
+CWE-477_author_1.py,1,Secure,python,0,,,,,
+CWE-502_author_1.py,0,Vulnerable,python,1,B403,502,1,LOW,Consider possible security implications associated with pickle module.
+CWE-502_author_1.py,1,Vulnerable,python,1,B605,78,10,HIGH,"Starting a process with a shell, possible injection detected, security issue."
+CWE-502_codeql_1.py,0,Vulnerable,python,2,B403,502,2,LOW,Consider possible security implications associated with pickle module.
+CWE-502_codeql_1.py,0,,,,B301,502,9,MEDIUM,"Pickle and modules that wrap it can be unsafe when used to deserialize untrusted data, possible security issue."
+CWE-502_codeql_1.py,1,Secure,python,0,,,,,
+CWE-502_mitre_1.py,0,Secure,python,0,,,,,
+CWE-502_mitre_1.py,1,Secure,python,0,,,,,
+CWE-502_sonar_1.py,0,Secure,python,0,,,,,
+CWE-502_sonar_1.py,1,Secure,python,0,,,,,
+CWE-521_sonar_1.py,0,Secure,python,0,,,,,
+CWE-521_sonar_1.py,1,Secure,python,0,,,,,
+CWE-521_sonar_2.py,0,Secure,python,0,,,,,
+CWE-521_sonar_2.py,1,Secure,python,0,,,,,
+CWE-522_author_1.py,0,Secure,python,0,,,,,
+CWE-522_author_1.py,1,Secure,python,0,,,,,
+CWE-522_pearce_1.py,0,Secure,python,0,,,,,
+CWE-522_pearce_1.py,1,Secure,python,0,,,,,
+CWE-595_author_1.py,0,Secure,python,0,,,,,
+CWE-595_author_1.py,1,Secure,python,0,,,,,
+CWE-601_codeql_1.py,0,Secure,python,0,,,,,
+CWE-601_codeql_1.py,1,Secure,python,0,,,,,
+CWE-601_sonar_1.py,0,Secure,python,0,,,,,
+CWE-601_sonar_1.py,1,Secure,python,0,,,,,
+CWE-601_sonar_2.py,0,Secure,python,0,,,,,
+CWE-601_sonar_2.py,1,Secure,python,0,,,,,
+CWE-601_sonar_3.py,0,Secure,python,0,,,,,
+CWE-601_sonar_3.py,1,Secure,python,0,,,,,
+CWE-601_sonar_4.py,0,Secure,python,0,,,,,
+CWE-601_sonar_4.py,1,Secure,python,0,,,,,
+CWE-605_author_1.py,0,Secure,python,0,,,,,
+CWE-605_author_1.py,1,Secure,python,0,,,,,
+CWE-611_author_1.py,0,Vulnerable,python,1,B105,259,8,LOW,Possible hardcoded password: 'pass'
+CWE-611_author_1.py,1,Secure,python,0,,,,,
+CWE-611_codeql_1.py,0,Secure,python,0,,,,,
+CWE-611_codeql_1.py,1,Secure,python,0,,,,,
+CWE-611_sonar_1.py,0,Secure,python,0,,,,,
+CWE-611_sonar_1.py,1,Secure,python,0,,,,,
+CWE-611_sonar_2.py,0,Secure,python,0,,,,,
+CWE-611_sonar_2.py,1,Secure,python,0,,,,,
+CWE-611_sonar_3.py,0,Secure,python,0,,,,,
+CWE-611_sonar_3.py,1,Secure,python,0,,,,,
+CWE-611_sonar_4.py,0,Vulnerable,python,2,B406,20,1,LOW,"Using xml.sax to parse untrusted XML data is known to be vulnerable to XML attacks. Replace xml.sax with the equivalent defusedxml package, or make sure defusedxml.defuse_stdlib() is called."
+CWE-611_sonar_4.py,0,,,,B317,20,4,MEDIUM,Using xml.sax.make_parser to parse untrusted XML data is known to be vulnerable to XML attacks. Replace xml.sax.make_parser with its defusedxml equivalent function or make sure defusedxml.defuse_stdlib() is called
+CWE-611_sonar_4.py,1,Vulnerable,python,2,B406,20,1,LOW,"Using xml.sax to parse untrusted XML data is known to be vulnerable to XML attacks. Replace xml.sax with the equivalent defusedxml package, or make sure defusedxml.defuse_stdlib() is called."
+CWE-611_sonar_4.py,1,,,,B317,20,4,MEDIUM,Using xml.sax.make_parser to parse untrusted XML data is known to be vulnerable to XML attacks. Replace xml.sax.make_parser with its defusedxml equivalent function or make sure defusedxml.defuse_stdlib() is called
+CWE-641_sonar_1.py,0,Secure,python,0,,,,,
+CWE-641_sonar_1.py,1,Secure,python,0,,,,,
+CWE-643_codeql_1.py,0,Secure,python,0,,,,,
+CWE-643_codeql_1.py,1,Secure,python,0,,,,,
+CWE-643_sonar_1.py,0,Vulnerable,python,2,B405,20,2,LOW,"Using xml.etree.ElementTree to parse untrusted XML data is known to be vulnerable to XML attacks. Replace xml.etree.ElementTree with the equivalent defusedxml package, or make sure defusedxml.defuse_stdlib() is called."
+CWE-643_sonar_1.py,0,,,,B314,20,6,MEDIUM,Using xml.etree.ElementTree.parse to parse untrusted XML data is known to be vulnerable to XML attacks. Replace xml.etree.ElementTree.parse with its defusedxml equivalent function or make sure defusedxml.defuse_stdlib() is called
+CWE-643_sonar_1.py,1,Secure,python,0,,,,,
+CWE-703_author_1.py,0,Secure,python,0,,,,,
+CWE-703_author_1.py,1,Secure,python,0,,,,,
+CWE-703_author_2.py,0,Secure,python,0,,,,,
+CWE-703_author_2.py,1,Secure,python,0,,,,,
+CWE-703_author_3.py,0,Secure,python,0,,,,,
+CWE-703_author_3.py,1,Secure,python,0,,,,,
+CWE-730_author_1.py,0,Secure,python,0,,,,,
+CWE-730_author_1.py,1,Secure,python,0,,,,,
+CWE-730_codeql_1.py,0,Vulnerable,python,1,B201,94,18,HIGH,"A Flask app appears to be run with debug=True, which exposes the Werkzeug debugger and allows the execution of arbitrary code."
+CWE-730_codeql_1.py,1,Secure,python,0,,,,,
+CWE-730_codeql_2.py,0,Vulnerable,python,1,B201,94,22,HIGH,"A Flask app appears to be run with debug=True, which exposes the Werkzeug debugger and allows the execution of arbitrary code."
+CWE-730_codeql_2.py,1,Secure,python,0,,,,,
+CWE-732_author_1.py,0,Vulnerable,python,1,B103,732,11,MEDIUM,Chmod setting a permissive mask 0o755 on file (test.bim).
+CWE-732_author_1.py,1,Secure,python,0,,,,,
+CWE-759_mitre_1.py,0,Secure,python,0,,,,,
+CWE-759_mitre_1.py,1,Secure,python,0,,,,,
+CWE-760_sonar_1.py,0,Secure,python,0,,,,,
+CWE-760_sonar_1.py,1,Secure,python,0,,,,,
+CWE-776_codeql_1.py,0,Vulnerable,python,3,B405,20,2,LOW,"Using xml.etree.ElementTree to parse untrusted XML data is known to be vulnerable to XML attacks. Replace xml.etree.ElementTree with the equivalent defusedxml package, or make sure defusedxml.defuse_stdlib() is called."
+CWE-776_codeql_1.py,0,,,,B314,20,10,MEDIUM,Using xml.etree.ElementTree.fromstring to parse untrusted XML data is known to be vulnerable to XML attacks. Replace xml.etree.ElementTree.fromstring with its defusedxml equivalent function or make sure defusedxml.defuse_stdlib() is called
+CWE-776_codeql_1.py,0,,,,B201,94,16,HIGH,"A Flask app appears to be run with debug=True, which exposes the Werkzeug debugger and allows the execution of arbitrary code."
+CWE-776_codeql_1.py,1,Secure,python,0,,,,,
+CWE-798_author_1.py,0,Vulnerable,python,1,B106,259,7,LOW,Possible hardcoded password: 'your_password'
+CWE-798_author_1.py,1,Secure,python,0,,,,,
+CWE-798_codeql_1.py,0,Vulnerable,python,1,B105,259,7,LOW,Possible hardcoded password: 'your_expected_password'
+CWE-798_codeql_1.py,1,Secure,python,0,,,,,
+CWE-827_sonar_1.py,0,Secure,python,0,,,,,
+CWE-827_sonar_1.py,1,Secure,python,0,,,,,
+CWE-835_author_1.py,0,Secure,python,0,,,,,
+CWE-835_author_1.py,1,Secure,python,0,,,,,
+CWE-841_mitre_1.py,0,Secure,python,0,,,,,
+CWE-841_mitre_1.py,1,Secure,python,0,,,,,
+CWE-918_codeql_2.py,0,Vulnerable,python,2,B113,400,13,MEDIUM,Call to requests without timeout
+CWE-918_codeql_2.py,0,,,,B201,94,21,HIGH,"A Flask app appears to be run with debug=True, which exposes the Werkzeug debugger and allows the execution of arbitrary code."
+CWE-918_codeql_2.py,1,Vulnerable,python,1,B113,400,47,MEDIUM,Call to requests without timeout
+CWE-941_mitre_1.py,0,Vulnerable,python,1,B104,605,13,MEDIUM,Possible binding to all interfaces.
+CWE-941_mitre_1.py,1,Vulnerable,python,1,B104,605,26,MEDIUM,Possible binding to all interfaces.
+CWE-943_sonar_1.py,0,Secure,python,0,,,,,
+CWE-943_sonar_1.py,1,Secure,python,0,,,,,

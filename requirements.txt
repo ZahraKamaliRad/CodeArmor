@@ -2,3 +2,6 @@ orjson
 tqdm
 rich
 openai
+bandit
+pandas 
+matplotlib
