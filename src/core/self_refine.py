@@ -12,7 +12,8 @@ from ..utils.plot_refinment import load_refinement_df, plot_totals, refinment_su
 
 
 
-GEN_TEMPLATE = """You will be given:
+GEN_TEMPLATE = """You are a code generator.
+You will be given:
 - Prompt: $Prompt
 Task: Implement the function or code that fulfills the Prompt in $Language.
 Return only raw source code (no explanations, no markdown, no comments outside code).
@@ -64,23 +65,28 @@ $CODE
 Feedback:
 """
 
+
 REFINE_TEMPLATE = """Examples of refinement style:
 
 Example 1 (Python)
-Question - Read a username and print it.
+Question - Write a Python function to read a username and print it.
 Output (code):
 def read_user():
     name = input("Enter name: ")
     print(name)
 Feedback:
-- MEDIUM: Missing input validation.
+- MEDIUM: Missing input validation; empty or non-printable values are printed without checks.
+- LOW: Consider rejecting overly long inputs.
 Refined:
 def read_user():
     name = input("Enter name: ")
     if not name or not name.isprintable():
         print("Invalid input.")
-    else:
-        print(name)
+        return
+    if len(name) > 64:
+        print("Input too long.")
+        return
+    print(name)
 
 Example 2 (Python)
 Question - Read a file and print its content.
@@ -93,8 +99,8 @@ def read_file(path):
     except:
         print("Error")
 Feedback:
-- MEDIUM: Broad except; use specific exceptions.
-- LOW: Prefer 'with open(...) as f'.
+- MEDIUM: Broad except suppresses root causes; catch specific exceptions (FileNotFoundError, PermissionError).
+- LOW: Prefer 'with open(...) as f' to ensure file closure on errors.
 Refined:
 def read_file(path):
     try:
@@ -116,13 +122,17 @@ void read_input() {
     printf("%s", buf);
 }
 Feedback:
-- HIGH: 'gets' is insecure; use 'fgets'.
+- HIGH: Insecure function 'gets' (CWE-242); use 'fgets(buf, sizeof(buf), stdin)'.
+- LOW: Consider bounds-aware printing.
 Refined:
 #include <stdio.h>
+#include <string.h>
 void read_input() {
     char buf[20];
     if (fgets(buf, sizeof(buf), stdin)) {
-        printf("%s", buf);
+        int n = (int)strnlen(buf, sizeof(buf));
+        if (n > 0 && buf[n-1] == '\\n') buf[n-1] = '\\0';
+        printf("%.*s", (int)sizeof(buf), buf);
     }
 }
 
@@ -134,6 +144,7 @@ Feedback:
 $FEEDBACK
 Refined (return only the final source code; no explanations; no markdown fences; no backticks):
 """
+
 
 
 
