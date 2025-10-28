@@ -192,7 +192,7 @@ def strip_md(s: str) -> str:
     return strip_markdown_fences(s)
 
 def attempt_repair_loop(llm: "LLMClient",code: str,issues: List[Dict[str, Any]],plan_obj: Dict[str, Any],
-    lang: str,task_id: str,max_rounds: int = 1,history: list | None = None,run_out_dir: str = "") -> Tuple[str, List[Dict[str, Any]], bool, int]:
+    lang: str,task_id: str,iterations: int = 0,history: list | None = None,run_out_dir: str = "") -> Tuple[str, List[Dict[str, Any]], bool, int]:
     current_code = code
     current_issues = issues
     rounds = 0
@@ -207,9 +207,9 @@ def attempt_repair_loop(llm: "LLMClient",code: str,issues: List[Dict[str, Any]],
     
     print(f"[{task_id}] Starting repair loop with {len(current_issues)} issues...")
 
-    for r in range(1, max_rounds + 1):
+    for r in range(1,max(0,int(iterations)) + 1):
         rounds = r
-        print(f"[{task_id}] Repair iteration = {r}")
+        print(f"[{task_id}] Iteration = {r}")
 
         prompt = REPAIR_PROMPT_TEMPLATE.substitute(
             guide=guide,
@@ -220,7 +220,7 @@ def attempt_repair_loop(llm: "LLMClient",code: str,issues: List[Dict[str, Any]],
         try:
             fixed_raw = llm.generate_text(prompt).strip()
         except Exception as e:
-            print(f"[{task_id}] [Error] LLM repair generation failed: {e}")
+            print(f"[{task_id}] [Error] LLM  generation failed: {e}")
             break
 
         fixed_code = strip_md(fixed_raw)
@@ -232,7 +232,7 @@ def attempt_repair_loop(llm: "LLMClient",code: str,issues: List[Dict[str, Any]],
             print(f"[{task_id}] No changes detected. Breaking repair loop.")
             break
 
-        new_issues, _ = analyze_code(fixed_code, lang, tmpname=f"{task_id}_repair_r{r}")
+        new_issues, _ = analyze_code(fixed_code, lang, tmpname=f"{task_id}_iter{r}")
         csv_log(run_out_dir=run_out_dir, task_id=str(task_id),
                        iter_idx=r, language=lang, issues=new_issues)
         history.append({"iter": r, "issues": new_issues})
@@ -248,7 +248,7 @@ def attempt_repair_loop(llm: "LLMClient",code: str,issues: List[Dict[str, Any]],
     print(f"[{task_id}] Repair loop finished after {rounds} rounds. Remaining issues: {len(current_issues)}")
     return current_code, current_issues, success, rounds
 
-def run_framework(records, dataset_name: str = "output", limit: int | None = None, save_plans: bool = True, max_repair_rounds: int = 1, output_filename: str | None = None):
+def run_framework(records, dataset_name: str = "output", limit: int | None = None, save_plans: bool = True, iterations: int = 0, output_filename: str | None = None):
     llm = LLMClient(api_key="")
     out_dir = PATHS.dataset_run_dir(dataset_name)
     if output_filename is None:
@@ -336,7 +336,7 @@ def run_framework(records, dataset_name: str = "output", limit: int | None = Non
                 )
                 final_code, final_issues, final_loc = code, issues, loc
                 repair_summary = {"success": False, "rounds": 0}
-                if len(issues) > 0 and max_repair_rounds > 0:
+                if len(issues) > 0 and iterations > 0:
                     fixed_code, issues_after, success, rounds = attempt_repair_loop(
                         llm=llm,
                         code=code,
@@ -344,7 +344,7 @@ def run_framework(records, dataset_name: str = "output", limit: int | None = Non
                         plan_obj=plan_obj,
                         lang=lang,
                         task_id=task_id,
-                        max_rounds=max_repair_rounds,
+                        iterations=int(iterations),
                         run_out_dir=str(out_dir)
                     )
                     final_code, final_issues = fixed_code, issues_after

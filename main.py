@@ -38,7 +38,7 @@ def run_direct(dataset: str, filename: str, limit: int):
     output_filename = Path(filename).name
     GenerateCode(records, dataset_name=f"{dataset}_direct", limit=limit, output_filename=output_filename)
 
-def run_planning(dataset: str, filename: str, limit: int, repairs: int):
+def run_planning(dataset: str, filename: str, limit: int, iterations: int):
     dataset_registered(dataset)
     fpath = abs_dataset_path(filename)
     ds = get_dataset(dataset, fpath)
@@ -46,10 +46,10 @@ def run_planning(dataset: str, filename: str, limit: int, repairs: int):
     output_filename = Path(filename).name
     run_framework(
         records,
-        dataset_name=f"{dataset}_planning_iter{repairs}",
+        dataset_name=f"{dataset}_planning_iter{iterations}",
         limit=limit,
         save_plans=True,
-        max_repair_rounds=max(0, repairs),
+        iterations=max(0, iterations),
         output_filename=output_filename,
     )
 
@@ -97,14 +97,13 @@ def main():
     parser.add_argument("--dataset", choices=["securityeval", "llmseceval", "sallm"], required=True)
     parser.add_argument("--file", required=True)
     parser.add_argument("--limit", type=int, default=None)
-    parser.add_argument("--iterations", type=int, default=1)
-    parser.add_argument("--repairs", type=int, default=1)
+    parser.add_argument("--iterations", type=int, default=0)
     args = parser.parse_args()
 
     if args.mode == "direct":
         run_direct(args.dataset, args.file, args.limit)
     elif args.mode == "planning":
-        run_planning(args.dataset, args.file, args.limit, args.repairs)
+        run_planning(args.dataset, args.file, args.limit, args.iterations)
     elif args.mode == "prefix":
         run_pe03a(args.dataset, args.file, args.limit)
     elif args.mode == "rci":
@@ -119,3 +118,5 @@ if __name__ == "__main__":
 # python main.py --mode direct --dataset securityeval --file securityeval.jsonl
 # python main.py --mode prefix --dataset securityeval --file SecurityEval.jsonl
 # python main.py --mode rci --dataset securityeval --file SecurityEval.jsonl --iterations 5 --limit 5
+#  python main.py --mode planning --dataset securityeval --file SecurityEval.jsonl --iterations 3 --limit 3
+
