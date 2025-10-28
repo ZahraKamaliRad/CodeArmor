@@ -8,6 +8,7 @@ from src.core.direct import GenerateCode
 from src.core.PCAR import run_framework
 from src.core.prefix import pe03a
 from src.core.rci import rci_tecniqu
+from src.core.self_refine import Self_Refine
 
 def dataset_registered(name: str):
     module_map = {
@@ -74,9 +75,25 @@ def run_rci(dataset: str, filename: str, limit: int, iterations: int):
         output_filename=output_filename,
     )
 
+def run_self_refine(dataset: str, filename: str, limit: int, iterations: int):
+    dataset_registered(dataset)
+    fpath = abs_dataset_path(filename)
+    ds = get_dataset(dataset, fpath)
+    records = to_direct_records(ds)
+    output_filename = Path(filename).name
+    Self_Refine(
+        records,
+        dataset_name=f"{dataset}_selfrefine_iter{iterations}",
+        limit=limit,
+        iterations=iterations,
+        output_filename=output_filename,
+    )
+
+
+
 def main():
     parser = argparse.ArgumentParser(description="Secure CodeGen CLI (Bandit-only)")
-    parser.add_argument("--mode", choices=["direct", "planning", "prefix", "rci"], required=True)
+    parser.add_argument("--mode", choices=["direct", "planning", "prefix", "rci","self_refine"], required=True)
     parser.add_argument("--dataset", choices=["securityeval", "llmseceval", "sallm"], required=True)
     parser.add_argument("--file", required=True)
     parser.add_argument("--limit", type=int, default=None)
@@ -92,6 +109,9 @@ def main():
         run_pe03a(args.dataset, args.file, args.limit)
     elif args.mode == "rci":
         run_rci(args.dataset, args.file, args.limit, args.iterations)
+    elif args.mode == "self_refine":
+        run_self_refine(args.dataset, args.file, args.limit, args.iterations)
+
 
 if __name__ == "__main__":
     main()
