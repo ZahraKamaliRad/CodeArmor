@@ -9,6 +9,7 @@ from src.core.PCAR import run_framework
 from src.core.prefix import pe03a
 from src.core.rci import rci_tecniqu
 from src.core.self_refine import Self_Refine
+from src.core.self_planning import Self_Planning 
 
 def dataset_registered(name: str):
     module_map = {
@@ -90,10 +91,22 @@ def run_self_refine(dataset: str, filename: str, limit: int, iterations: int):
     )
 
 
+def run_self_planning(dataset: str, filename: str, limit: int):
+    dataset_registered(dataset)
+    fpath = abs_dataset_path(filename)
+    ds = get_dataset(dataset, fpath)
+    records = to_direct_records(ds)
+    output_filename = Path(filename).name
+    Self_Planning(
+        records,
+        dataset_name=f"{dataset}_self_planning",
+        limit=limit,
+        output_filename=output_filename,
+    )
 
 def main():
     parser = argparse.ArgumentParser(description="Secure CodeGen CLI (Bandit-only)")
-    parser.add_argument("--mode", choices=["direct", "planning", "prefix", "rci","self_refine"], required=True)
+    parser.add_argument("--mode", choices=["direct", "planning", "prefix", "rci","self_refine","self_planning"], required=True)
     parser.add_argument("--dataset", choices=["securityeval", "llmseceval", "sallm"], required=True)
     parser.add_argument("--file", required=True)
     parser.add_argument("--limit", type=int, default=None)
@@ -110,13 +123,19 @@ def main():
         run_rci(args.dataset, args.file, args.limit, args.iterations)
     elif args.mode == "self_refine":
         run_self_refine(args.dataset, args.file, args.limit, args.iterations)
+    elif args.mode == "self_planning":
+        run_self_planning(args.dataset, args.file, args.limit)
+
 
 
 if __name__ == "__main__":
     main()
 
-# python main.py --mode direct --dataset securityeval --file securityeval.jsonl
+# python main.py --mode direct --dataset securityeval --file SecurityEval.jsonl
 # python main.py --mode prefix --dataset securityeval --file SecurityEval.jsonl
 # python main.py --mode rci --dataset securityeval --file SecurityEval.jsonl --iterations 5 --limit 5
 #  python main.py --mode planning --dataset securityeval --file SecurityEval.jsonl --iterations 3 --limit 3
+
+#  python main.py --mode direct --dataset sallm --file SALLM.jsonl
+# python main.py --mode self_planning --dataset sallm --file SALLM.jsonl
 
