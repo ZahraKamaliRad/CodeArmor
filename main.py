@@ -10,6 +10,8 @@ from src.core.prefix import pe03a
 from src.core.rci import rci_tecniqu
 from src.core.self_refine import Self_Refine
 from src.core.self_planning import Self_Planning 
+from src.core.one_shot import OneShot
+
 
 def dataset_registered(name: str):
     module_map = {
@@ -22,6 +24,7 @@ def dataset_registered(name: str):
         raise KeyError(f"Unknown dataset: {name}. Expected one of {list(module_map)}")
     importlib.import_module(mod)
 
+
 def abs_dataset_path(filename: str) -> Path:
     fpath = Path(filename)
     if not fpath.is_absolute():
@@ -31,6 +34,7 @@ def abs_dataset_path(filename: str) -> Path:
         raise FileNotFoundError(f"Dataset file not found: {fpath}")
     return fpath
 
+
 def run_direct(dataset: str, filename: str, limit: int):
     dataset_registered(dataset)
     fpath = abs_dataset_path(filename)
@@ -38,6 +42,7 @@ def run_direct(dataset: str, filename: str, limit: int):
     records = to_direct_records(ds)
     output_filename = Path(filename).name
     GenerateCode(records, dataset_name=f"{dataset}_direct", limit=limit, output_filename=output_filename)
+
 
 def run_planning(dataset: str, filename: str, limit: int, iterations: int):
     dataset_registered(dataset)
@@ -54,6 +59,7 @@ def run_planning(dataset: str, filename: str, limit: int, iterations: int):
         output_filename=output_filename,
     )
 
+
 def run_pe03a(dataset: str, filename: str, limit: int):
     dataset_registered(dataset)
     fpath = abs_dataset_path(filename)
@@ -61,6 +67,7 @@ def run_pe03a(dataset: str, filename: str, limit: int):
     records = to_direct_records(ds)
     output_filename = Path(filename).name
     pe03a(records, dataset_name=f"{dataset}_prefix", limit=limit, output_filename=output_filename)
+
 
 def run_rci(dataset: str, filename: str, limit: int, iterations: int):
     dataset_registered(dataset)
@@ -75,6 +82,7 @@ def run_rci(dataset: str, filename: str, limit: int, iterations: int):
         iterations=iterations,
         output_filename=output_filename,
     )
+
 
 def run_self_refine(dataset: str, filename: str, limit: int, iterations: int):
     dataset_registered(dataset)
@@ -104,13 +112,34 @@ def run_self_planning(dataset: str, filename: str, limit: int):
         output_filename=output_filename,
     )
 
+
+def run_one_shot(dataset: str, filename: str, limit: int, k: int):
+    dataset_registered(dataset)
+    fpath = abs_dataset_path(filename)
+    ds = get_dataset(dataset, fpath)
+    records = to_direct_records(ds)
+    output_filename = Path(filename).name
+    OneShot(
+        records,
+        dataset_name=f"{dataset}_one_shot",
+        limit=limit,
+        output_filename=output_filename,
+        k=k,
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description="Secure CodeGen CLI (Bandit-only)")
-    parser.add_argument("--mode", choices=["direct", "planning", "prefix", "rci","self_refine","self_planning"], required=True)
+    parser.add_argument(
+        "--mode",
+        choices=["direct", "planning", "prefix", "rci", "self_refine", "self_planning", "one_shot"],
+        required=True,
+    )
     parser.add_argument("--dataset", choices=["securityeval", "llmseceval", "sallm"], required=True)
     parser.add_argument("--file", required=True)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--iterations", type=int, default=0)
+    parser.add_argument("--k", type=int, default=5)
     args = parser.parse_args()
 
     if args.mode == "direct":
@@ -125,11 +154,13 @@ def main():
         run_self_refine(args.dataset, args.file, args.limit, args.iterations)
     elif args.mode == "self_planning":
         run_self_planning(args.dataset, args.file, args.limit)
-
+    elif args.mode == "one_shot":
+        run_one_shot(args.dataset, args.file, args.limit, args.k)
 
 
 if __name__ == "__main__":
     main()
+
 
 # python main.py --mode direct --dataset securityeval --file SecurityEval.jsonl
 # python main.py --mode prefix --dataset securityeval --file SecurityEval.jsonl
@@ -138,4 +169,6 @@ if __name__ == "__main__":
 
 #  python main.py --mode direct --dataset sallm --file SALLM.jsonl
 # python main.py --mode self_planning --dataset sallm --file SALLM.jsonl
+# python main.py --mode one_shot --dataset sallm --file SALLM.jsonl --limit 10 --k 5
+
 
