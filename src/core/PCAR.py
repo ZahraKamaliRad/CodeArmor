@@ -4,34 +4,36 @@ from pathlib import Path
 import json, re, time
 from typing import Any, Dict, List, Tuple
 from string import Template
-
-from .openai_client import LLMClient
+import time
+from .openai_client import LLMClient,sanitize_model_name
 from .analyzer import analyze_code
 from ..config import PATHS
 from ..utils.io import csv_log
 from ..utils.plot_refinment import load_refinement_df, plot_totals, refinment_summary
 from ..utils.metrics import save_metrics_result
+from ..utils.tokens import get_token_stats
 
-
-
-
-PLANNING_TEMPLATE = Template(
-    """You are a secure-coding planner.
+PLANNING_TEMPLATE = Template("""
+You are a secure-coding planner.
 Return ONLY a valid JSON object and nothing else (no markdown, no prose, no code).
 
-Fields required: cwe, summary, threats, policy, algorithm, secure_apis, error_handling, acceptance_criteria.
-- summary: short (<= 2 lines)
-- threats: list of strings
-- policy: object with relevant limits/allowlists/paths/extensions (as needed for the task)
-- algorithm: list of short actionable steps (no code)
-- secure_apis: list of API names to use (e.g., yaml.safe_load, urllib.parse.urlparse, parameterized SQL, etc.)
-- error_handling: lines like "Exception -> behavior"
-- acceptance_criteria: concrete checks that MUST be enforced
+Fields required:
+cwe, summary, threats, policy, algorithm, secure_apis, error_handling, acceptance_criteria.
+
+Rules:
+- summary: short (<= 2 lines, no implementation details)
+- threats: concise list (3–5 key risks)
+- policy: object with limits/allowlists/paths/extensions as needed
+- algorithm: list of short, numbered, sequential steps (1., 2., 3., ...) describing what to do conceptually, not how
+- secure_apis: list of safe APIs or functions (e.g., yaml.safe_load, urllib.parse.urlparse, parameterized SQL)
+- error_handling: list of "Exception -> behavior"
+- acceptance_criteria: list of concrete checks that must hold true
+- If language is not specified in input, assume "python".
 
 Input Prompt:
 $problem
-"""
-)
+""")
+
 
 
 CODING_TEMPLATE = (
@@ -249,8 +251,11 @@ def attempt_repair_loop(llm: "LLMClient",code: str,issues: List[Dict[str, Any]],
     return current_code, current_issues, success, rounds
 
 def run_framework(records, dataset_name: str = "output", limit: int | None = None, save_plans: bool = True, iterations: int = 0, output_filename: str | None = None):
-    llm = LLMClient(api_key="")
-    out_dir = PATHS.dataset_run_dir(dataset_name)
+    start_time = time.time()
+    llm = LLMClient(api_key="sk-Gr8Sna1pUqdHJ11APRNLDBtcugQqujqBWbAEeGOisXxIMBY5")
+    model_tag = sanitize_model_name(llm.model)
+    run_name = f"{dataset_name}_{model_tag}"
+    out_dir = PATHS.dataset_run_dir(run_name)
     if output_filename is None:
         output_filename = f"{out_dir.name}.jsonl"
     output_file = out_dir / output_filename
@@ -372,7 +377,7 @@ def run_framework(records, dataset_name: str = "output", limit: int | None = Non
             pfile.close()
 
 
-    csv_path = out_dir / "Effect_Of_Refinment.csv"
+        csv_path = out_dir / "Effect_Of_Refinment.csv"
     try:
         metrics_dir = out_dir / "rate" / "vuln_density"
         metrics_txt = metrics_dir / f"{Path(output_filename).stem}_metrics.txt"
@@ -385,9 +390,18 @@ def run_framework(records, dataset_name: str = "output", limit: int | None = Non
             plot_totals(csv_path, out=out_img, kind="line", show=False, df=df, verbose=False)
             refinment_summary(csv_path, metrics_txt=metrics_txt, df=df, write=True)
 
+        token_stats = get_token_stats()
+        metrics_dir.mkdir(parents=True, exist_ok=True)
+        elapsed = time.time() - start_time
+        with metrics_txt.open("a", encoding="utf-8") as mf:
+            mf.write("\n")
+            mf.write(f"prompt_tokens: {token_stats.get('prompt_tokens', 0)}\n")
+            mf.write(f"completion_tokens: {token_stats.get('completion_tokens', 0)}\n")
+            mf.write(f"total_tokens: {token_stats.get('total_tokens', 0)}\n")
+            mf.write(f"model: {llm.model}\n") 
+            mf.write(f"runtime_seconds: {elapsed:.2f}\n")
+
+
         print(f"[metrics] saved to: {metrics_txt}")
     except Exception as e:
         print(f"[metrics-save] {e}")
-
-    print(f"Tasks completed. Results saved to {output_file}")
-    return str(output_file)

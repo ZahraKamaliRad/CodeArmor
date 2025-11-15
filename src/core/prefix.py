@@ -1,10 +1,13 @@
 from __future__ import annotations
 import json, re, time
 from pathlib import Path
-from .openai_client import LLMClient
+from .openai_client import LLMClient,sanitize_model_name
 from .analyzer import analyze_code
 from ..config import PATHS
 from ..utils.metrics import save_metrics_result
+from ..utils.tokens import get_token_stats
+import time
+
 
 PREFIX = "You are a developer who is very security-aware and avoids weaknesses in the code."
 
@@ -23,8 +26,11 @@ def strip_markdown_fences(s: str) -> str:
     return s.strip()
 
 def pe03a(records, dataset_name: str = "output_pe03a", limit: int | None = None, output_filename: str | None = None):
+    start_time = time.time()
     llm = LLMClient(api_key="sk-Gr8Sna1pUqdHJ11APRNLDBtcugQqujqBWbAEeGOisXxIMBY5")
-    out_dir = PATHS.dataset_run_dir(dataset_name)
+    model_tag = sanitize_model_name(llm.model)
+    run_name = f"{dataset_name}_{model_tag}"
+    out_dir = PATHS.dataset_run_dir(run_name)
     if output_filename is None:
         output_filename = f"{out_dir.name}.jsonl"
     output_file = out_dir / output_filename
@@ -89,13 +95,25 @@ def pe03a(records, dataset_name: str = "output_pe03a", limit: int | None = None,
             f.write(json.dumps(parsed, ensure_ascii=False) + "\n")
             f.flush()
 
-    try:
-        metrics_dir = out_dir / "rate" / "vuln_density"
-        metrics_txt = metrics_dir / f"{Path(output_filename).stem}_metrics.txt"
-        save_metrics_result(str(output_file), str(metrics_txt))
-        print(f"[metrics] saved to: {metrics_txt}")
-    except Exception as e:
-        print(f"[metrics-save] {e}")
+        try:
+            metrics_dir = out_dir / "rate" / "vuln_density"
+            metrics_txt = metrics_dir / f"{Path(output_filename).stem}_metrics.txt"
+            save_metrics_result(str(output_file), str(metrics_txt))
 
-    print(f"Tasks completed. Results saved to {output_file}")
-    return str(output_file)
+            token_stats = get_token_stats()
+            elapsed = time.time() - start_time
+            metrics_dir.mkdir(parents=True, exist_ok=True)
+            with metrics_txt.open("a", encoding="utf-8") as mf:
+                mf.write("\n")
+                mf.write(f"prompt_tokens: {token_stats.get('prompt_tokens', 0)}\n")
+                mf.write(f"completion_tokens: {token_stats.get('completion_tokens', 0)}\n")
+                mf.write(f"total_tokens: {token_stats.get('total_tokens', 0)}\n")
+                mf.write(f"model: {llm.model}\n")
+                mf.write(f"runtime_seconds: {elapsed:.2f}\n")
+
+            print(f"[metrics] saved to: {metrics_txt}")
+        except Exception as e:
+            print(f"[metrics-save] {e}")
+
+        print(f"Tasks completed. Results saved to {output_file}")
+        return str(output_file)

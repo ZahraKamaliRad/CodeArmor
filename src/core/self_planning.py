@@ -3,11 +3,11 @@ from pathlib import Path
 from string import Template
 import json, re, time
 
-from .openai_client import LLMClient
+from .openai_client import LLMClient,sanitize_model_name
 from ..config import PATHS
 from ..utils.metrics import save_metrics_result
+from ..utils.tokens import get_token_stats
 from .analyzer import analyze_code
-
 
 
 def strip_markdown_fences(s: str) -> str:
@@ -16,6 +16,7 @@ def strip_markdown_fences(s: str) -> str:
     s = re.sub(r"^\s*```[a-zA-Z0-9]*\s*\n", "", s)
     s = re.sub(r"\n\s*```\s*$", "", s)
     return s.strip()
+
 
 def get_language(record) -> tuple[str, str]:
     v = record.get("Language")
@@ -26,6 +27,7 @@ def get_language(record) -> tuple[str, str]:
         if s.startswith("python"):
             return "Python", "python"
     return "Python", "python"
+
 
 def retry_llm(llm: LLMClient, prompt: str, attempts: int = 3):
     last = None
@@ -43,9 +45,6 @@ def retry_llm(llm: LLMClient, prompt: str, attempts: int = 3):
             break
     return None
 
-
-
-from string import Template
 
 PLANNING_PROMPT = Template("""
 You are a secure-coding planner.
@@ -100,7 +99,6 @@ Output:
 """)
 
 
-
 CODING_PROMPT = Template("""
 You are a secure code generator.
 Return ONLY executable source code. No explanations, no markdown, no comments, no docstrings.
@@ -121,11 +119,13 @@ $intent
 """)
 
 
-
-def Self_Planning(records, dataset_name: str = "output_planning", limit: int | None = None, output_filename: str | None = None):
+def Self_Planning(records,dataset_name: str = "output_planning",limit: int | None = None,
+    output_filename: str | None = None,):
+    start_time = time.time()
     llm = LLMClient(api_key="sk-Gr8Sna1pUqdHJ11APRNLDBtcugQqujqBWbAEeGOisXxIMBY5")
-
-    out_dir = PATHS.dataset_run_dir(dataset_name)
+    model_tag = sanitize_model_name(llm.model)
+    run_name = f"{dataset_name}_{model_tag}"
+    out_dir = PATHS.dataset_run_dir(run_name)
     dataset_name = out_dir.name
     if output_filename is None:
         output_filename = f"{dataset_name}.jsonl"
@@ -165,6 +165,8 @@ def Self_Planning(records, dataset_name: str = "output_planning", limit: int | N
                     "loc": 0,
                     "secure": False,
                 }
+                parsed["bandit_result"] = {"secure": parsed["secure"], "issues": parsed["issues"]}
+
                 f.write(json.dumps(parsed, ensure_ascii=False) + "\n")
                 f.flush()
                 continue
@@ -175,7 +177,7 @@ def Self_Planning(records, dataset_name: str = "output_planning", limit: int | N
             print(f"--- Coding {task_name} [{lang_title}] ---")
             t2 = time.perf_counter()
             coding_inp = CODING_PROMPT.substitute(plan=plan_text, intent=intent_for_llm)
-            code_resp = retry_llm(llm,coding_inp)
+            code_resp = retry_llm(llm, coding_inp)
             t3 = time.perf_counter()
 
             if not code_resp:
@@ -206,13 +208,28 @@ def Self_Planning(records, dataset_name: str = "output_planning", limit: int | N
                     "secure": len(issues) == 0,
                 }
 
+            parsed["bandit_result"] = {"secure": parsed["secure"], "issues": parsed["issues"]}
+
             f.write(json.dumps(parsed, ensure_ascii=False) + "\n")
             f.flush()
 
     try:
         metrics_dir = out_dir / "rate" / "vuln_density"
         metrics_txt = metrics_dir / f"{Path(output_filename).stem}_metrics.txt"
+
         save_metrics_result(str(output_file), str(metrics_txt))
+
+        token_stats = get_token_stats()
+        elapsed = time.time() - start_time
+        metrics_dir.mkdir(parents=True, exist_ok=True)
+        with metrics_txt.open("a", encoding="utf-8") as mf:
+            mf.write("\n")
+            mf.write(f"prompt_tokens: {token_stats.get('prompt_tokens', 0)}\n")
+            mf.write(f"completion_tokens: {token_stats.get('completion_tokens', 0)}\n")
+            mf.write(f"total_tokens: {token_stats.get('total_tokens', 0)}\n")
+            mf.write(f"model: {llm.model}\n")
+            mf.write(f"runtime_seconds: {elapsed:.2f}\n")
+
         print(f"[metrics] saved to: {metrics_txt}")
     except Exception as e:
         print(f"[metrics-save] {e}")
