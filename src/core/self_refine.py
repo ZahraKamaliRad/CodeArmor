@@ -3,13 +3,13 @@ import json, re, time
 from pathlib import Path
 from string import Template
 
-from .openai_client import LLMClient
+from .openai_client import LLMClient,sanitize_model_name
 from .analyzer import analyze_code
 from ..config import PATHS
 from ..utils.io import csv_log
 from ..utils.metrics import save_metrics_result
 from ..utils.plot_refinment import load_refinement_df, plot_totals, refinment_summary
-
+from ..utils.tokens import get_token_stats
 
 
 GEN_TEMPLATE = """You are a code generator.
@@ -22,14 +22,21 @@ Return only raw source code (no explanations, no markdown, no comments outside c
 FEEDBACK_TEMPLATE = """Examples of feedback style:
 
 Example 1 (Python)
-Question - Write a Python function to read a username and print it.
+Question -
+import xml.etree.ElementTree as ET
+
+def parse_xml(xml_string):
+    '''
+    Parse xml_string and return the root element of the XML document
+    '''
 Output (code):
-def read_user():
-    name = input("Enter name: ")
-    print(name)
+import xml.etree.ElementTree as ET
+
+def parse_xml(xml_string):
+    return ET.fromstring(xml_string)
 Feedback:
-- MEDIUM: Missing input validation; empty or non-printable values are printed without checks.
-- LOW: Consider rejecting overly long inputs.
+- LOW: Using xml.etree.ElementTree to parse untrusted XML data is known to be vulnerable to XML attacks. Replace xml.etree.ElementTree with the equivalent defusedxml package, or make sure defusedxml.defuse_stdlib() is called. (rule_id: B405, CWE-20)
+- MEDIUM: Using xml.etree.ElementTree.fromstring to parse untrusted XML data is known to be vulnerable to XML attacks. Replace xml.etree.ElementTree.fromstring with its defusedxml equivalent function or make sure defusedxml.defuse_stdlib() is called. (rule_id: B314, CWE-20)
 
 Example 2 (Python)
 Question - Read a file and print its content.
@@ -44,20 +51,6 @@ def read_file(path):
 Feedback:
 - MEDIUM: Broad except suppresses root causes; catch specific exceptions (FileNotFoundError, PermissionError).
 - LOW: Prefer 'with open(...) as f' to ensure file closure on errors.
-
-Example 3 (C)
-Question - Read a string from stdin and echo it.
-Output (code):
-#include <stdio.h>
-void read_input() {
-    char buf[20];
-    gets(buf);
-    printf("%s", buf);
-}
-Feedback:
-- HIGH: Insecure function 'gets' (CWE-242); use 'fgets(buf, sizeof(buf), stdin)'.
-- LOW: Consider bounds-aware printing.
-
 ---
 Question - $Prompt
 Output (code):
@@ -69,24 +62,30 @@ Feedback:
 REFINE_TEMPLATE = """Examples of refinement style:
 
 Example 1 (Python)
-Question - Write a Python function to read a username and print it.
+Question -
+import xml.etree.ElementTree as ET
+
+def parse_xml(xml_string):
+    '''
+    Parse xml_string and return the root element of the XML document
+    '''
 Output (code):
-def read_user():
-    name = input("Enter name: ")
-    print(name)
+import xml.etree.ElementTree as ET
+
+def parse_xml(xml_string):
+    return ET.fromstring(xml_string)
 Feedback:
-- MEDIUM: Missing input validation; empty or non-printable values are printed without checks.
-- LOW: Consider rejecting overly long inputs.
+- LOW: Using xml.etree.ElementTree to parse untrusted XML data is known to be vulnerable to XML attacks. Replace xml.etree.ElementTree with the equivalent defusedxml package, or make sure defusedxml.defuse_stdlib() is called. (rule_id: B405, CWE-20)
+- MEDIUM: Using xml.etree.ElementTree.fromstring to parse untrusted XML data is known to be vulnerable to XML attacks. Replace xml.etree.ElementTree.fromstring with its defusedxml equivalent function or make sure defusedxml.defuse_stdlib() is called. (rule_id: B314, CWE-20)
 Refined:
-def read_user():
-    name = input("Enter name: ")
-    if not name or not name.isprintable():
-        print("Invalid input.")
-        return
-    if len(name) > 64:
-        print("Input too long.")
-        return
-    print(name)
+from defusedxml import ElementTree as ET
+
+def parse_xml(xml_string):
+    '''
+    Parse xml_string and return the root element of the XML document
+    using a safer XML parser implementation.
+    '''
+    return ET.fromstring(xml_string)
 
 Example 2 (Python)
 Question - Read a file and print its content.
@@ -112,30 +111,6 @@ def read_file(path):
     except PermissionError:
         print("Permission denied.")
 
-Example 3 (C)
-Question - Read a string from stdin and echo it.
-Output (code):
-#include <stdio.h>
-void read_input() {
-    char buf[20];
-    gets(buf);
-    printf("%s", buf);
-}
-Feedback:
-- HIGH: Insecure function 'gets' (CWE-242); use 'fgets(buf, sizeof(buf), stdin)'.
-- LOW: Consider bounds-aware printing.
-Refined:
-#include <stdio.h>
-#include <string.h>
-void read_input() {
-    char buf[20];
-    if (fgets(buf, sizeof(buf), stdin)) {
-        int n = (int)strnlen(buf, sizeof(buf));
-        if (n > 0 && buf[n-1] == '\\n') buf[n-1] = '\\0';
-        printf("%.*s", (int)sizeof(buf), buf);
-    }
-}
-
 ---
 Question - $Prompt
 Output (code):
@@ -146,9 +121,8 @@ Refined (return only the final source code; no explanations; no markdown fences;
 """
 
 
-
-
 CODE_FENCE_RE = re.compile(r"```[a-zA-Z0-9]*\s*\n(.*?)\n```", re.DOTALL)
+
 
 def strip_markdown_fences(s: str) -> str:
     if not isinstance(s, str):
@@ -157,19 +131,21 @@ def strip_markdown_fences(s: str) -> str:
     s = re.sub(r"\n\s*```\s*$", "", s)
     return s.strip()
 
+
 def extract_code(s: str) -> str:
-    """Extract code only: prefer first fenced block; otherwise clean prose."""
     if not isinstance(s, str):
         return ""
     m = CODE_FENCE_RE.search(s)
     if m:
         return m.group(1).strip()
     s2 = strip_markdown_fences(s)
-    s2 = re.sub(r"^\s*(Here('s| is)|Refined:).*?\n", "", s2, flags=re.IGNORECASE|re.DOTALL)
+    s2 = re.sub(r"^\s*(Here('s| is)|Refined:).*?\n", "", s2, flags=re.IGNORECASE | re.DOTALL)
     return s2.strip()
+
 
 def render(tpl: str, **kwargs) -> str:
     return Template(tpl).substitute(**kwargs)
+
 
 def generate_with_retry(llm: LLMClient, prompt: str, retries: int = 3):
     raw = None
@@ -179,8 +155,16 @@ def generate_with_retry(llm: LLMClient, prompt: str, retries: int = 3):
             break
         except Exception as e:
             msg = str(e)
-            if "502" in msg or "Bad Gateway" in msg or "InternalServerError" in msg or "LLM parse error" in msg:
-                time.sleep(2 ** attempt)
+            if (
+                "502" in msg
+                or "Bad Gateway" in msg
+                or "InternalServerError" in msg
+                or "LLM parse error" in msg
+                or "timeout" in msg
+            ):
+                wait = 2 ** attempt
+                print(f"[Warn] transient error. Retrying in {wait}s (attempt {attempt+1}/{retries})...")
+                time.sleep(wait)
                 continue
             else:
                 print(f"[Error] {e}")
@@ -188,12 +172,12 @@ def generate_with_retry(llm: LLMClient, prompt: str, retries: int = 3):
     return raw
 
 
-
-def Self_Refine(records, dataset_name: str = "output_self_refine",
-                limit: int | None = None, iterations: int = 1,
-                output_filename: str | None = None):
+def Self_Refine(records,dataset_name: str = "output_self_refine",limit: int | None = None,iterations: int = 1,output_filename: str | None = None,):
+    start_time = time.time()
     llm = LLMClient(api_key="sk-Gr8Sna1pUqdHJ11APRNLDBtcugQqujqBWbAEeGOisXxIMBY5")
-    out_dir = PATHS.dataset_run_dir(dataset_name)
+    model_tag = sanitize_model_name(llm.model)
+    run_name = f"{dataset_name}_{model_tag}"
+    out_dir = PATHS.dataset_run_dir(run_name)
     if output_filename is None:
         output_filename = f"{out_dir.name}.jsonl"
     output_file = out_dir / output_filename
@@ -232,8 +216,10 @@ def Self_Refine(records, dataset_name: str = "output_self_refine",
                     "error": "generation_failed",
                     "issues": [],
                     "loc": 0,
-                    "secure": False
+                    "secure": False,
                 }
+                parsed["bandit_result"] = {"secure": parsed["secure"], "issues": parsed["issues"]}
+
                 f.write(json.dumps(parsed, ensure_ascii=False) + "\n")
                 f.flush()
                 continue
@@ -244,7 +230,15 @@ def Self_Refine(records, dataset_name: str = "output_self_refine",
 
             issues0, loc0 = analyze_code(initial_code, lang, tmpname=task_id)
             csv_log(run_out_dir, task_id, 0, lang, issues0)
-            history.append({"round": 0, "review": None, "code": initial_code, "issues": issues0, "loc": loc0})
+            history.append(
+                {
+                    "round": 0,
+                    "review": None,
+                    "code": initial_code,
+                    "issues": issues0,
+                    "loc": loc0,
+                }
+            )
 
             for i in range(1, max(1, iterations) + 1):
                 if iterations > 1:
@@ -255,7 +249,15 @@ def Self_Refine(records, dataset_name: str = "output_self_refine",
                 if feedback is None:
                     issues_i, loc_i = analyze_code(current_code, lang, tmpname=task_id)
                     csv_log(run_out_dir, task_id, i, lang, issues_i)
-                    history.append({"round": i, "review": None, "code": current_code, "issues": issues_i, "loc": loc_i})
+                    history.append(
+                        {
+                            "round": i,
+                            "review": None,
+                            "code": current_code,
+                            "issues": issues_i,
+                            "loc": loc_i,
+                        }
+                    )
                     break
 
                 refine_prompt = render(REFINE_TEMPLATE, Prompt=dataset_prompt, CODE=current_code, FEEDBACK=feedback)
@@ -263,13 +265,29 @@ def Self_Refine(records, dataset_name: str = "output_self_refine",
                 if improved_raw is None:
                     issues_i, loc_i = analyze_code(current_code, lang, tmpname=task_id)
                     csv_log(run_out_dir, task_id, i, lang, issues_i)
-                    history.append({"round": i, "review": feedback, "code": current_code, "issues": issues_i, "loc": loc_i})
+                    history.append(
+                        {
+                            "round": i,
+                            "review": feedback,
+                            "code": current_code,
+                            "issues": issues_i,
+                            "loc": loc_i,
+                        }
+                    )
                     break
 
                 improved_code = extract_code(improved_raw)
                 issues_i, loc_i = analyze_code(improved_code, lang, tmpname=task_id)
                 csv_log(run_out_dir, task_id, i, lang, issues_i)
-                history.append({"round": i, "review": feedback, "code": improved_code, "issues": issues_i, "loc": loc_i})
+                history.append(
+                    {
+                        "round": i,
+                        "review": feedback,
+                        "code": improved_code,
+                        "issues": issues_i,
+                        "loc": loc_i,
+                    }
+                )
                 current_code = improved_code
 
             issues, loc = analyze_code(current_code, lang, tmpname=task_id)
@@ -283,23 +301,37 @@ def Self_Refine(records, dataset_name: str = "output_self_refine",
                 "final_code": current_code,
                 "issues": issues,
                 "loc": loc,
-                "secure": len(issues) == 0
+                "secure": len(issues) == 0,
             }
+
+            parsed["bandit_result"] = {"secure": parsed["secure"], "issues": parsed["issues"]}
+
             f.write(json.dumps(parsed, ensure_ascii=False) + "\n")
             f.flush()
 
+        csv_path = out_dir / "Effect_Of_Refinment.csv"
         try:
-            csv_path = out_dir / "Effect_Of_Refinment.csv"
             metrics_dir = out_dir / "rate" / "vuln_density"
-            metrics_txt = metrics_dir / f"{Path(output_file).stem}_metrics.txt"
+            metrics_txt = metrics_dir / f"{Path(output_filename).stem}_metrics.txt"
 
             save_metrics_result(str(output_file), str(metrics_txt))
 
             if csv_path.exists():
                 df = load_refinement_df(csv_path)
-                plot_out = out_dir / "plots" / "Refinment_log.png"
-                plot_totals(csv_path, out=plot_out, show=False, df=df, verbose=False)
+                out_img = out_dir / "plots" / "Refinment_Plot.png"
+                plot_totals(csv_path, out=out_img, kind="line", show=False, df=df, verbose=False)
                 refinment_summary(csv_path, metrics_txt=metrics_txt, df=df, write=True)
+
+            token_stats = get_token_stats()
+            elapsed = time.time() - start_time
+            metrics_dir.mkdir(parents=True, exist_ok=True)
+            with metrics_txt.open("a", encoding="utf-8") as mf:
+                mf.write("\n")
+                mf.write(f"prompt_tokens: {token_stats.get('prompt_tokens', 0)}\n")
+                mf.write(f"completion_tokens: {token_stats.get('completion_tokens', 0)}\n")
+                mf.write(f"total_tokens: {token_stats.get('total_tokens', 0)}\n")
+                mf.write(f"model: {llm.model}\n")
+                mf.write(f"runtime_seconds: {elapsed:.2f}\n")
 
             print(f"[metrics] saved to: {metrics_txt}")
         except Exception as e:
