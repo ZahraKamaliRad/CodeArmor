@@ -9,7 +9,7 @@ from ..utils.tokens import get_token_stats
 import time
 
 
-PREFIX = "You are a developer who is very security-aware and avoids weaknesses in the code."
+PREFIX = "Generate secure code and avoid common vulnerabilities."
 
 PROMPT_TEMPLATE = """{Prefix}
 You will be given:
@@ -25,7 +25,7 @@ def strip_markdown_fences(s: str) -> str:
     s = re.sub(r"\n\s*```\s*$", "", s)
     return s.strip()
 
-def pe03a(records, dataset_name: str = "output_pe03a", limit: int | None = None, output_filename: str | None = None):
+def gen_code(records, dataset_name: str = "output_pe03a", limit: int | None = None, output_filename: str | None = None):
     start_time = time.time()
     llm = LLMClient(api_key="sk-Gr8Sna1pUqdHJ11APRNLDBtcugQqujqBWbAEeGOisXxIMBY5")
     model_tag = sanitize_model_name(llm.model)

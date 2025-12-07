@@ -172,7 +172,7 @@ def generate_with_retry(llm: LLMClient, prompt: str, retries: int = 3):
     return raw
 
 
-def Self_Refine(records,dataset_name: str = "output_self_refine",limit: int | None = None,iterations: int = 1,output_filename: str | None = None,):
+def SelfRefine_gen_code(records,dataset_name: str = "output_self_refine",limit: int | None = None,iterations: int = 1,output_filename: str | None = None,):
     start_time = time.time()
     llm = LLMClient(api_key="sk-Gr8Sna1pUqdHJ11APRNLDBtcugQqujqBWbAEeGOisXxIMBY5")
     model_tag = sanitize_model_name(llm.model)

@@ -107,13 +107,8 @@ def safe_json_parse(s: str) -> dict | None:
         return None
 
 
-def OneShot(
-    records,
-    dataset_name: str = "output_fewshot",
-    limit: int | None = None,
-    output_filename: str | None = None,
-    k: int = 5,
-):
+def OneShot_gen_code(records,dataset_name: str = "output_fewshot",limit: int | None = None,
+output_filename: str | None = None,k: int = 5):
     start_time = time.time()
     llm = LLMClient(api_key="sk-Gr8Sna1pUqdHJ11APRNLDBtcugQqujqBWbAEeGOisXxIMBY5")
     model_tag = sanitize_model_name(llm.model)

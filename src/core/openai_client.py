@@ -16,6 +16,11 @@ class LLMClient:
         base_url: str = "https://api.gapgpt.app/v1",
         model: str = "gpt-4o-mini",
         #model: str = "deepseek-chat",
+        #model: str = "gpt-5-mini",
+        #model: str = "gemma-3-27b-it",
+        #model: str = "gemini-2.5-flash",
+        #model: str ="gemini-2.0-flash",
+        #model: str = "qwen3-235b-a22b",
         timeout: float = 60.0,
     ):
         self.client = OpenAI(
@@ -25,16 +30,12 @@ class LLMClient:
         )
         self.model = model
 
-    def generate_text(
-        self,
-        prompt: str,
-        track_tokens: bool = True,
-        log_file: str | None = None,
-        extra_token_meta: dict | None = None,
-    ) -> str:
+    def generate_text(self,prompt: str,track_tokens: bool = True,log_file: str | None = None,
+        extra_token_meta: dict | None = None, seed: int | None = None) -> str:
         resp = self.client.chat.completions.create(
             model=self.model,
             messages=[{"role": "user", "content": prompt}],
+            seed= 1234
         )
         content = resp.choices[0].message.content
         text = content.strip() if isinstance(content, str) else "".join(map(str, content)).strip()

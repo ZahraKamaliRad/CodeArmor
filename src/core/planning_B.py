@@ -119,10 +119,10 @@ $intent
 """)
 
 
-def Self_Planning(records,dataset_name: str = "output_planning",limit: int | None = None,
+def PlanningB_gen_code(records,dataset_name: str = "output_planning",limit: int | None = None,
     output_filename: str | None = None,):
     start_time = time.time()
-    llm = LLMClient(api_key="sk-Gr8Sna1pUqdHJ11APRNLDBtcugQqujqBWbAEeGOisXxIMBY5")
+    llm = LLMClient(api_key="")
     model_tag = sanitize_model_name(llm.model)
     run_name = f"{dataset_name}_{model_tag}"
     out_dir = PATHS.dataset_run_dir(run_name)

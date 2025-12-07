@@ -5,13 +5,15 @@ from pathlib import Path
 from src.config import PATHS
 from src.data.base import get_dataset, to_direct_records
 from src.core.direct import GenerateCode
-from src.core.PCAR import run_framework
-from src.core.prefix import pe03a
-from src.core.rci import rci_tecniqu
-from src.core.self_refine import Self_Refine
-from src.core.self_planning import Self_Planning 
-from src.core.one_shot import OneShot
-
+from src.core.planning_A import run_framework
+from src.core.naive_secure import gen_code
+from src.core.rci import rci_gen_code
+from src.core.self_refine import SelfRefine_gen_code
+from src.core.planning_B import PlanningB_gen_code
+from src.core.one_shot import OneShot_gen_code
+from src.core.CoT import cot_gen_code
+from src.core.planning_C import planningC_gen_code
+from src.core.planning_cot import coding
 
 def dataset_registered(name: str):
     module_map = {
@@ -44,29 +46,25 @@ def run_direct(dataset: str, filename: str, limit: int):
     GenerateCode(records, dataset_name=f"{dataset}_direct", limit=limit, output_filename=output_filename)
 
 
-def run_planning(dataset: str, filename: str, limit: int, iterations: int):
+def run_planning_A(dataset: str, filename: str, limit: int, iterations: int):
     dataset_registered(dataset)
     fpath = abs_dataset_path(filename)
     ds = get_dataset(dataset, fpath)
     records = to_direct_records(ds)
     output_filename = Path(filename).name
-    run_framework(
-        records,
-        dataset_name=f"{dataset}_planning_iter{iterations}",
-        limit=limit,
-        save_plans=True,
-        iterations=max(0, iterations),
-        output_filename=output_filename,
+    run_framework(records,dataset_name=f"{dataset}_planning_A{iterations}",
+        limit=limit,save_plans=True,
+        iterations=max(0, iterations),output_filename=output_filename,
     )
 
 
-def run_pe03a(dataset: str, filename: str, limit: int):
+def run_nive_secure(dataset: str, filename: str, limit: int):
     dataset_registered(dataset)
     fpath = abs_dataset_path(filename)
     ds = get_dataset(dataset, fpath)
     records = to_direct_records(ds)
     output_filename = Path(filename).name
-    pe03a(records, dataset_name=f"{dataset}_prefix", limit=limit, output_filename=output_filename)
+    gen_code(records, dataset_name=f"{dataset}_nive_secure", limit=limit, output_filename=output_filename)
 
 
 def run_rci(dataset: str, filename: str, limit: int, iterations: int):
@@ -75,7 +73,7 @@ def run_rci(dataset: str, filename: str, limit: int, iterations: int):
     ds = get_dataset(dataset, fpath)
     records = to_direct_records(ds)
     output_filename = Path(filename).name
-    rci_tecniqu(
+    rci_gen_code(
         records,
         dataset_name=f"{dataset}_rci_iter{iterations}",
         limit=limit,
@@ -90,24 +88,19 @@ def run_self_refine(dataset: str, filename: str, limit: int, iterations: int):
     ds = get_dataset(dataset, fpath)
     records = to_direct_records(ds)
     output_filename = Path(filename).name
-    Self_Refine(
-        records,
-        dataset_name=f"{dataset}_selfrefine_iter{iterations}",
-        limit=limit,
-        iterations=iterations,
-        output_filename=output_filename,
-    )
+    SelfRefine_gen_code(records,dataset_name=f"{dataset}_selfrefine_iter{iterations}",
+        limit=limit,iterations=iterations,output_filename=output_filename)
 
 
-def run_self_planning(dataset: str, filename: str, limit: int):
+def run_planning_B(dataset: str, filename: str, limit: int):
     dataset_registered(dataset)
     fpath = abs_dataset_path(filename)
     ds = get_dataset(dataset, fpath)
     records = to_direct_records(ds)
     output_filename = Path(filename).name
-    Self_Planning(
+    PlanningB_gen_code(
         records,
-        dataset_name=f"{dataset}_self_planning",
+        dataset_name=f"{dataset}_planning_B",
         limit=limit,
         output_filename=output_filename,
     )
@@ -119,20 +112,41 @@ def run_one_shot(dataset: str, filename: str, limit: int, k: int):
     ds = get_dataset(dataset, fpath)
     records = to_direct_records(ds)
     output_filename = Path(filename).name
-    OneShot(
-        records,
-        dataset_name=f"{dataset}_one_shot",
-        limit=limit,
-        output_filename=output_filename,
-        k=k,
-    )
+    OneShot_gen_code(records,dataset_name=f"{dataset}_one_shot",
+        limit=limit,output_filename=output_filename,k=k)
+
+def run_cot(dataset: str, filename: str, limit: int):
+    dataset_registered(dataset)
+    fpath = abs_dataset_path(filename)
+    ds = get_dataset(dataset, fpath)
+    records = to_direct_records(ds)
+    output_filename = Path(filename).name
+    cot_gen_code(records, dataset_name=f"{dataset}_CoT", limit=limit, output_filename=output_filename)
+
+def run_planning_C(dataset: str, filename: str, limit: int):
+    dataset_registered(dataset)
+    fpath = abs_dataset_path(filename)
+    ds = get_dataset(dataset, fpath)
+    records = to_direct_records(ds)
+    output_filename = Path(filename).name
+    planningC_gen_code(records, dataset_name=f"{dataset}_planning_C", limit=limit, output_filename=output_filename)
+
+def run_planning_cot(dataset: str, filename: str, limit: int):
+    dataset_registered(dataset)
+    fpath = abs_dataset_path(filename)
+    ds = get_dataset(dataset, fpath)
+    records = to_direct_records(ds)
+    output_filename = Path(filename).name
+    coding(records, dataset_name=f"{dataset}_planning_cot", limit=limit, output_filename=output_filename)
+
+
 
 
 def main():
     parser = argparse.ArgumentParser(description="Secure CodeGen CLI (Bandit-only)")
     parser.add_argument(
         "--mode",
-        choices=["direct", "planning", "prefix", "rci", "self_refine", "self_planning", "one_shot"],
+        choices=["direct", "planning_A", "naive_secure", "rci", "self_refine", "planning_B", "one_shot","cot","planning_C","planning_cot"],
         required=True,
     )
     parser.add_argument("--dataset", choices=["securityeval", "llmseceval", "sallm"], required=True)
@@ -144,18 +158,24 @@ def main():
 
     if args.mode == "direct":
         run_direct(args.dataset, args.file, args.limit)
-    elif args.mode == "planning":
-        run_planning(args.dataset, args.file, args.limit, args.iterations)
-    elif args.mode == "prefix":
-        run_pe03a(args.dataset, args.file, args.limit)
+    elif args.mode == "planning_A":
+        run_planning_A(args.dataset, args.file, args.limit, args.iterations)
+    elif args.mode == "naive_secure":
+        run_nive_secure(args.dataset, args.file, args.limit)
     elif args.mode == "rci":
         run_rci(args.dataset, args.file, args.limit, args.iterations)
     elif args.mode == "self_refine":
         run_self_refine(args.dataset, args.file, args.limit, args.iterations)
-    elif args.mode == "self_planning":
-        run_self_planning(args.dataset, args.file, args.limit)
+    elif args.mode == "planning_B":
+        run_planning_B(args.dataset, args.file, args.limit)
     elif args.mode == "one_shot":
         run_one_shot(args.dataset, args.file, args.limit, args.k)
+    elif args.mode == "cot":
+        run_cot(args.dataset, args.file, args.limit)
+    elif args.mode == "planning_C":
+        run_planning_C(args.dataset, args.file, args.limit)
+    elif args.mode == "planning_cot":
+        run_planning_cot(args.dataset, args.file, args.limit)
 
 
 if __name__ == "__main__":
@@ -163,12 +183,5 @@ if __name__ == "__main__":
 
 
 # python main.py --mode direct --dataset securityeval --file SecurityEval.jsonl
-# python main.py --mode prefix --dataset securityeval --file SecurityEval.jsonl
-# python main.py --mode rci --dataset securityeval --file SecurityEval.jsonl --iterations 5 --limit 5
-#  python main.py --mode planning --dataset securityeval --file SecurityEval.jsonl --iterations 3 --limit 3
-
 #  python main.py --mode direct --dataset sallm --file SALLM.jsonl
-# python main.py --mode self_planning --dataset sallm --file SALLM.jsonl
-# python main.py --mode one_shot --dataset sallm --file SALLM.jsonl --limit 10 --k 5
-
 

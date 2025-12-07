@@ -1,9 +1,0 @@
-
-=== Security Metrics (Rate & Density) ===
-dataset:           SecurityEval
-items (N):         121
-total issues (V):  63
-total LOC (L):     1353
-
-Vulnerability Rate = V/N = 63/121 = 0.520661
-Vulnerability Density = V/L = 63/1353 = 0.046563
