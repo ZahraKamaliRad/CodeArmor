@@ -1,0 +1,11 @@
+{
+  "llm": {
+    "api_key_path": "api_key.txt",
+    "api_url": "https://api.gapgpt.app/v1",
+    "model": "gpt-5.1-codex-mini",
+    "timeout": 60,
+    "seed": 1234
+  }
+}
+
+
