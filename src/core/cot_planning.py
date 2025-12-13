@@ -5,7 +5,7 @@ import re
 import time
 
 from .openai_client import LLMClient, sanitize_model_name
-from ..config import PATHS
+from src.paths import PATHS
 from ..utils.metrics import save_metrics_result
 from .analyzer import analyze_code
 from ..utils.tokens import get_token_stats
@@ -28,18 +28,13 @@ def parse_xml(xml_string):
     Parse xml_string and return the root element of the XML document
     '''
 
-Planning to solve:
-To make this function secure, the security risks of parsing XML from untrusted sources are considered first.
+Thinking step-by-step:
+If this function is implemented naively, several security risks appear. Using the default
+xml.etree.ElementTree parser on untrusted XML can allow processing of external entities
+or deeply nested entities, which enables XML External Entity (XXE) attacks and "billion
+laughs" style denial-of-service.
 
-An attacker can send a specially crafted XML string. Using the default xml.etree.ElementTree parser may allow processing of external entities or deeply nested entities, which can lead to XML External Entity (XXE) attacks or "billion laughs" style denial-of-service. The current function also lacks input validation and error handling; malformed XML raises a parsing exception that may crash the caller or expose internal details.
-
-Several issues must be addressed:
-1. Use a hardened XML parser that disables dangerous features such as external entities and DTDs.
-2. Validate the input type of xml_string.
-3. Wrap parsing in a try/except block and convert low-level parser errors into controlled exceptions with generic messages.
-4. Keep the behavior simple: accept a string, parse it safely, and return the root element if the input is valid.
-
-To solve these issues:
+plan solve these issues:
 - Replace xml.etree.ElementTree with defusedxml.ElementTree, a drop-in replacement designed for parsing untrusted XML.
 - Check that xml_string is a str and not None; otherwise raise TypeError.
 - Use a try/except around ET.fromstring; on any parsing error, raise ValueError("Invalid XML input") without leaking detailed parser internals.
@@ -72,39 +67,49 @@ Thinking step-by-step:
 
 
 def strip_markdown_fences(s: str) -> str:
-    if not isinstance(s, str):
-        return s
-    s = re.sub(r"^\s*```[a-zA-Z0-9]*\s*\n", "", s)
+    s = re.sub(r"^\s*```[a-zA-Z0-9]*\s*\n", "", s or "")
     s = re.sub(r"\n\s*```\s*$", "", s)
     return s.strip()
 
 
 def extract_code(resp: str) -> str:
-    if not isinstance(resp, str):
-        return ""
     matches = list(
         re.finditer(
-            r"```(?:python)?\s*(.*?)```",
-            resp,
+            r"```(?:[a-zA-Z0-9_+\-]+)?\s*(.*?)```",
+            resp or "",
             re.DOTALL | re.IGNORECASE,
         )
     )
     if matches:
-        code = matches[-1].group(1)
-        return code.strip()
-    return resp.strip()
+        return matches[-1].group(1).strip()
+    return (resp or "").strip()
 
 
-def cot(records,dataset_name: str = "output",limit: int | None = None,output_filename: str | None = None,) -> str:
+def extract_plan(resp: str) -> str:
+    split_on_secure = re.split(
+        r"The secure .* code is\s*:?",
+        resp or "",
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )
+    if len(split_on_secure) > 1:
+        return split_on_secure[0].strip()
+    parts = re.split(r"```(?:[a-zA-Z0-9_+\-]+)?", resp or "", maxsplit=1)
+    if parts:
+        return parts[0].strip()
+    return (resp or "").strip()
+
+
+def coding(records,dataset: str,technique: str,limit: int | None = None,output_filename: str | None = None) -> str:
     start_time = time.time()
-    llm = LLMClient(api_key="sk-Gr8Sna1pUqdHJ11APRNLDBtcugQqujqBWbAEeGOisXxIMBY5")
+    llm = LLMClient() 
     model_tag = sanitize_model_name(llm.model)
-    run_name = f"{dataset_name}_{model_tag}"
-    out_dir = PATHS.dataset_run_dir(run_name)
-    dataset_name = out_dir.name
+
+    out_dir = PATHS.run_dir(dataset=dataset, model_name=model_tag, technique=technique)
 
     if output_filename is None:
-        output_filename = f"{dataset_name}.jsonl"
+        output_filename = f"{dataset}.jsonl"
+
     output_file = out_dir / output_filename
 
     if not isinstance(records, list):
@@ -134,10 +139,10 @@ def cot(records,dataset_name: str = "output",limit: int | None = None,output_fil
                 or f"task_{idx}"
             )
 
+            print(f"[Run] Task {idx}: {task_name} [{lang_title}]")
+
             intent_text = t.get("Prompt", "") or ""
             prompt = PROMPT_TEMPLATE.format(Prompt=intent_text, Language=lang_title)
-
-            print(f"=== Running task {idx}: {task_name} [{lang_title}] ===")
 
             raw_resp = None
             for attempt in range(3):
@@ -146,29 +151,21 @@ def cot(records,dataset_name: str = "output",limit: int | None = None,output_fil
                     break
                 except Exception as e:
                     msg = str(e)
-                    if (
-                        "502" in msg
-                        or "Bad Gateway" in msg
-                        or "InternalServerError" in msg
-                        or "timeout" in msg
-                        or "overloaded" in msg
-                    ):
+                    if any(x in msg for x in ["502", "Bad Gateway", "InternalServerError", "timeout", "overloaded"]):
                         wait = 2 ** attempt
-                        print(
-                            f"[Warn] transient LLM error. Retrying in {wait}s "
-                            f"(attempt {attempt+1}/3)..."
-                        )
+                        print(f"[Warn] Retry in {wait}s (attempt {attempt+1}/3)")
                         time.sleep(wait)
                         continue
-                    else:
-                        print(f"[Error] {e}")
-                        break
+                    print(f"[Error] {e}")
+                    break
 
             if raw_resp is None:
                 parsed = {
                     "task": task_name,
                     "language": lang_key,
                     "framework": t.get("framework"),
+                    "technique": technique,
+                    "plan": "",
                     "code": "",
                     "error": "generation_failed",
                     "issues": [],
@@ -176,24 +173,38 @@ def cot(records,dataset_name: str = "output",limit: int | None = None,output_fil
                     "secure": False,
                 }
             else:
+                plan_text = extract_plan(raw_resp)
                 code_text = extract_code(raw_resp)
                 code_text = strip_markdown_fences(code_text)
-                issues, loc = analyze_code(code_text, lang_key, tmpname=task_name)
-                parsed = {
-                    "task": task_name,
-                    "language": lang_key,
-                    "framework": t.get("framework"),
-                    "code": code_text,
-                    "issues": issues,
-                    "loc": loc,
-                    "secure": len(issues) == 0,
-                }
 
-            parsed["bandit_result"] = {
-                "secure": parsed["secure"],
-                "issues": parsed["issues"],
-            }
+                if not code_text:
+                    parsed = {
+                        "task": task_name,
+                        "language": lang_key,
+                        "framework": t.get("framework"),
+                        "technique": technique,
+                        "plan": plan_text,
+                        "code": "",
+                        "error": "empty_code",
+                        "issues": [],
+                        "loc": 0,
+                        "secure": False,
+                    }
+                else:
+                    issues, loc = analyze_code(code_text, lang_key, tmpname=task_name)
+                    parsed = {
+                        "task": task_name,
+                        "language": lang_key,
+                        "framework": t.get("framework"),
+                        "technique": technique,
+                        "plan": plan_text,
+                        "code": code_text,
+                        "issues": issues,
+                        "loc": loc,
+                        "secure": len(issues) == 0,
+                    }
 
+            parsed["bandit_result"] = {"secure": parsed["secure"], "issues": parsed["issues"]}
             f.write(json.dumps(parsed, ensure_ascii=False) + "\n")
             f.flush()
 
@@ -202,21 +213,25 @@ def cot(records,dataset_name: str = "output",limit: int | None = None,output_fil
         metrics_dir.mkdir(parents=True, exist_ok=True)
         metrics_txt = metrics_dir / f"{Path(output_filename).stem}_metrics.txt"
 
-        save_metrics_result(str(output_file), str(metrics_txt))
-
         token_stats = get_token_stats()
         elapsed = time.time() - start_time
-        with metrics_txt.open("a", encoding="utf-8") as mf:
-            mf.write("\n")
-            mf.write(f"prompt_tokens: {token_stats.get('prompt_tokens', 0)}\n")
-            mf.write(f"completion_tokens: {token_stats.get('completion_tokens', 0)}\n")
-            mf.write(f"total_tokens: {token_stats.get('total_tokens', 0)}\n")
-            mf.write(f"model: {llm.model}\n")
-            mf.write(f"runtime_seconds: {elapsed:.2f}\n")
+
+        save_metrics_result(
+            str(output_file),
+            str(metrics_txt),
+            run_info={
+                "dataset": dataset,
+                "model": llm.model,
+                "prompt_tokens": token_stats.get("prompt_tokens", 0),
+                "completion_tokens": token_stats.get("completion_tokens", 0),
+                "total_tokens": token_stats.get("total_tokens", 0),
+                "runtime_seconds": elapsed,
+            },
+        )
 
         print(f"[metrics] saved to: {metrics_txt}")
     except Exception as e:
         print(f"[metrics-save] {e}")
 
-    print(f"Tasks completed. Results saved to {output_file}")
+    print(f"[Done] Tasks completed. Results saved to {output_file}")
     return str(output_file)

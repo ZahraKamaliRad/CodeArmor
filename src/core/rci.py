@@ -2,13 +2,14 @@ from __future__ import annotations
 import json, re, time
 from pathlib import Path
 
-from .openai_client import LLMClient,sanitize_model_name
+from .openai_client import LLMClient, sanitize_model_name
 from .analyzer import analyze_code
-from ..config import PATHS
+from src.paths import PATHS
 from ..utils.io import csv_log
 from ..utils.metrics import save_metrics_result
 from ..utils.plot_refinment import load_refinement_df, plot_totals, refinment_summary
 from ..utils.tokens import get_token_stats
+
 
 BASE_TEMPLATE = """You are a code generator.
 You will be given:
@@ -16,9 +17,11 @@ You will be given:
 Task: Implement the function or code that fulfills the Prompt in {Language}.
 Return only raw source code (no explanations, no markdown, no comments outside code).
 """
+
 REVIEW_TEMPLATE = """Review the following answer and find security problems with it: 
 {CODE}
 """
+
 IMPROVE_TEMPLATE = """Based on the critique: 
 {CRIT}
 improve the following answer: 
@@ -44,25 +47,31 @@ def generate_with_retry(llm: LLMClient, prompt: str, retries: int = 3):
             break
         except Exception as e:
             msg = str(e)
-            if "502" in msg or "Bad Gateway" in msg or "InternalServerError" in msg:
+            if "502" in msg or "Bad Gateway" in msg or "InternalServerError" in msg or "timeout" in msg or "overloaded" in msg:
                 time.sleep(2 ** attempt)
                 continue
-            else:
-                print(f"[Error] {e}")
-                break
+            print(f"[Error] {e}")
+            break
     return raw
 
 
-def rci_gen_code(records,dataset_name: str = "output_rci",limit: int | None = None,
-    iterations: int = 1,output_filename: str | None = None,):
+def rci_gen_code(
+    records,
+    dataset: str,
+    technique: str,
+    limit: int | None = None,
+    iterations: int = 1,
+    output_filename: str | None = None,
+):
     start_time = time.time()
-    llm = LLMClient(api_key="sk-Gr8Sna1pUqdHJ11APRNLDBtcugQqujqBWbAEeGOisXxIMBY5")
+    llm = LLMClient()
     model_tag = sanitize_model_name(llm.model)
-    run_name = f"{dataset_name}_{model_tag}"
-    out_dir = PATHS.dataset_run_dir(run_name)
+
+    out_dir = PATHS.run_dir(dataset=dataset, model_name=model_tag, technique=technique)
 
     if output_filename is None:
-        output_filename = f"{out_dir.name}.jsonl"
+        output_filename = f"{dataset}.jsonl"
+
     output_file = out_dir / output_filename
     run_out_dir = str(out_dir)
 
@@ -75,10 +84,13 @@ def rci_gen_code(records,dataset_name: str = "output_rci",limit: int | None = No
             lt = lang.lower()
             if lt.startswith("py"):
                 lang_title = "Python"
+                lang_key = "python"
             elif lt.startswith("cpp") or "c++" in lt:
                 lang_title = "C++"
+                lang_key = "cpp"
             else:
                 lang_title = "C"
+                lang_key = "c"
 
             task_id = t.get("ID")
             dataset_prompt = t.get("Prompt", "")
@@ -91,9 +103,10 @@ def rci_gen_code(records,dataset_name: str = "output_rci",limit: int | None = No
             if raw_initial is None:
                 parsed = {
                     "task": task_id,
-                    "language": lang,
+                    "language": lang_key,
                     "framework": t.get("framework"),
-                    "technique": f"rci_iter{iterations}",
+                    "technique": technique,
+                    "rci_iterations": int(iterations),
                     "iterations": [],
                     "initial_code": "",
                     "final_code": "",
@@ -102,6 +115,7 @@ def rci_gen_code(records,dataset_name: str = "output_rci",limit: int | None = No
                     "loc": 0,
                     "secure": False,
                 }
+                parsed["bandit_result"] = {"secure": parsed["secure"], "issues": parsed["issues"]}
                 f.write(json.dumps(parsed, ensure_ascii=False) + "\n")
                 f.flush()
                 continue
@@ -110,8 +124,8 @@ def rci_gen_code(records,dataset_name: str = "output_rci",limit: int | None = No
             current_code = initial_code
             history = []
 
-            issues0, loc0 = analyze_code(initial_code, lang, tmpname=task_id)
-            csv_log(run_out_dir, task_id, 0, lang, issues0)
+            issues0, loc0 = analyze_code(initial_code, lang_key, tmpname=task_id)
+            csv_log(run_out_dir, task_id, 0, lang_key, issues0)
             history.append(
                 {
                     "round": 0,
@@ -122,15 +136,15 @@ def rci_gen_code(records,dataset_name: str = "output_rci",limit: int | None = No
                 }
             )
 
-            for i in range(1, max(1, iterations) + 1):
+            for i in range(1, max(1, int(iterations)) + 1):
                 if iterations > 1:
                     print(f"[RCI] Round {i}/{iterations}")
 
                 review_prompt = REVIEW_TEMPLATE.format(CODE=current_code)
                 critique = generate_with_retry(llm, review_prompt)
                 if critique is None:
-                    issues_i, loc_i = analyze_code(current_code, lang, tmpname=task_id)
-                    csv_log(run_out_dir, task_id, i, lang, issues_i)
+                    issues_i, loc_i = analyze_code(current_code, lang_key, tmpname=task_id)
+                    csv_log(run_out_dir, task_id, i, lang_key, issues_i)
                     history.append(
                         {
                             "round": i,
@@ -145,8 +159,8 @@ def rci_gen_code(records,dataset_name: str = "output_rci",limit: int | None = No
                 improve_prompt = IMPROVE_TEMPLATE.format(CRIT=critique, CODE=current_code)
                 improved_raw = generate_with_retry(llm, improve_prompt)
                 if improved_raw is None:
-                    issues_i, loc_i = analyze_code(current_code, lang, tmpname=task_id)
-                    csv_log(run_out_dir, task_id, i, lang, issues_i)
+                    issues_i, loc_i = analyze_code(current_code, lang_key, tmpname=task_id)
+                    csv_log(run_out_dir, task_id, i, lang_key, issues_i)
                     history.append(
                         {
                             "round": i,
@@ -159,8 +173,8 @@ def rci_gen_code(records,dataset_name: str = "output_rci",limit: int | None = No
                     break
 
                 improved_code = strip_markdown_fences(improved_raw)
-                issues_i, loc_i = analyze_code(improved_code, lang, tmpname=task_id)
-                csv_log(run_out_dir, task_id, i, lang, issues_i)
+                issues_i, loc_i = analyze_code(improved_code, lang_key, tmpname=task_id)
+                csv_log(run_out_dir, task_id, i, lang_key, issues_i)
                 history.append(
                     {
                         "round": i,
@@ -172,13 +186,14 @@ def rci_gen_code(records,dataset_name: str = "output_rci",limit: int | None = No
                 )
                 current_code = improved_code
 
-            issues, loc = analyze_code(current_code, lang, tmpname=task_id)
+            issues, loc = analyze_code(current_code, lang_key, tmpname=task_id)
 
             parsed = {
                 "task": task_id,
-                "language": lang,
+                "language": lang_key,
                 "framework": t.get("framework"),
-                "technique": f"rci_iter{iterations}",
+                "technique": technique,
+                "rci_iterations": int(iterations),
                 "iterations": history,
                 "initial_code": initial_code,
                 "final_code": current_code,
@@ -187,36 +202,44 @@ def rci_gen_code(records,dataset_name: str = "output_rci",limit: int | None = No
                 "secure": len(issues) == 0,
             }
 
+            parsed["bandit_result"] = {"secure": parsed["secure"], "issues": parsed["issues"]}
             f.write(json.dumps(parsed, ensure_ascii=False) + "\n")
             f.flush()
 
-        try:
-            csv_path = out_dir / "Effect_Of_Refinment.csv"
-            metrics_dir = out_dir / "rate" / "vuln_density"
-            metrics_txt = metrics_dir / f"{Path(output_file).stem}_metrics.txt"
+    csv_path = out_dir / "Effect_Of_Refinment.csv"
 
-            save_metrics_result(str(output_file), str(metrics_txt))
+    try:
+        metrics_dir = out_dir / "rate" / "vuln_density"
+        metrics_dir.mkdir(parents=True, exist_ok=True)
+        metrics_txt = metrics_dir / f"{Path(output_filename).stem}_metrics.txt"
 
-            if csv_path.exists():
-                df = load_refinement_df(csv_path)
-                plot_out = out_dir / "plots" / "Refinment_log.png"
-                plot_totals(csv_path, out=plot_out, show=False, df=df, verbose=False)
-                refinment_summary(csv_path, metrics_txt=metrics_txt, df=df, write=True)
+        token_stats = get_token_stats()
+        elapsed = time.time() - start_time
 
-            token_stats = get_token_stats()
-            elapsed = time.time() - start_time
-            metrics_dir.mkdir(parents=True, exist_ok=True)
-            with metrics_txt.open("a", encoding="utf-8") as mf:
-                mf.write("\n")
-                mf.write(f"prompt_tokens: {token_stats.get('prompt_tokens', 0)}\n")
-                mf.write(f"completion_tokens: {token_stats.get('completion_tokens', 0)}\n")
-                mf.write(f"total_tokens: {token_stats.get('total_tokens', 0)}\n")
-                mf.write(f"model: {llm.model}\n")
-                mf.write(f"runtime_seconds: {elapsed:.2f}\n")
+        save_metrics_result(
+            str(output_file),
+            str(metrics_txt),
+            run_info={
+                "dataset": dataset,
+                "model": llm.model,
+                "prompt_tokens": token_stats.get("prompt_tokens", 0),
+                "completion_tokens": token_stats.get("completion_tokens", 0),
+                "total_tokens": token_stats.get("total_tokens", 0),
+                "runtime_seconds": elapsed,
+                "rci_iterations": int(iterations),
+            },
+        )
 
-            print(f"[metrics] saved to: {metrics_txt}")
-        except Exception as e:
-            print(f"[metrics-save] {e}")
+        if csv_path.exists():
+            df = load_refinement_df(csv_path)
+            plot_out = out_dir / "plots" / "Refinment_log.png"
+            plot_out.parent.mkdir(parents=True, exist_ok=True)
+            plot_totals(csv_path, out=plot_out, show=False, df=df, verbose=False)
+            refinment_summary(csv_path, metrics_txt=metrics_txt, df=df, write=True)
+
+        print(f"[metrics] saved to: {metrics_txt}")
+    except Exception as e:
+        print(f"[metrics-save] {e}")
 
     print(f"Tasks completed. Results saved to {output_file}")
     return str(output_file)

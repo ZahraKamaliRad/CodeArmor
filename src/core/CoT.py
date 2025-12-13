@@ -5,7 +5,7 @@ import re
 import time
 
 from .openai_client import LLMClient, sanitize_model_name
-from ..config import PATHS
+from src.paths import PATHS
 from ..utils.metrics import save_metrics_result
 from .analyzer import analyze_code
 from ..utils.tokens import get_token_stats
@@ -58,8 +58,6 @@ Thinking step-by-step:
 """
 
 
-
-
 def strip_markdown_fences(s: str) -> str:
     if not isinstance(s, str):
         return s
@@ -84,16 +82,16 @@ def extract_code(resp: str) -> str:
     return resp.strip()
 
 
-def cot_gen_code(records,dataset_name: str = "output",limit: int | None = None,output_filename: str | None = None,) -> str:
+def cot_gen_code(records,dataset: str,technique: str,limit: int | None = None,output_filename: str | None = None) -> str:
     start_time = time.time()
-    llm = LLMClient(api_key="sk-Gr8Sna1pUqdHJ11APRNLDBtcugQqujqBWbAEeGOisXxIMBY5")
+    llm = LLMClient()
     model_tag = sanitize_model_name(llm.model)
-    run_name = f"{dataset_name}_{model_tag}"
-    out_dir = PATHS.dataset_run_dir(run_name)
-    dataset_name = out_dir.name
+
+    out_dir = PATHS.run_dir(dataset=dataset, model_name=model_tag, technique=technique)
 
     if output_filename is None:
-        output_filename = f"{dataset_name}.jsonl"
+        output_filename = f"{dataset}.jsonl"
+
     output_file = out_dir / output_filename
 
     if not isinstance(records, list):
@@ -158,6 +156,7 @@ def cot_gen_code(records,dataset_name: str = "output",limit: int | None = None,o
                     "task": task_name,
                     "language": lang_key,
                     "framework": t.get("framework"),
+                    "technique": technique,
                     "code": "",
                     "error": "generation_failed",
                     "issues": [],
@@ -172,6 +171,7 @@ def cot_gen_code(records,dataset_name: str = "output",limit: int | None = None,o
                     "task": task_name,
                     "language": lang_key,
                     "framework": t.get("framework"),
+                    "technique": technique,
                     "code": code_text,
                     "issues": issues,
                     "loc": loc,
@@ -191,17 +191,21 @@ def cot_gen_code(records,dataset_name: str = "output",limit: int | None = None,o
         metrics_dir.mkdir(parents=True, exist_ok=True)
         metrics_txt = metrics_dir / f"{Path(output_filename).stem}_metrics.txt"
 
-        save_metrics_result(str(output_file), str(metrics_txt))
-
         token_stats = get_token_stats()
         elapsed = time.time() - start_time
-        with metrics_txt.open("a", encoding="utf-8") as mf:
-            mf.write("\n")
-            mf.write(f"prompt_tokens: {token_stats.get('prompt_tokens', 0)}\n")
-            mf.write(f"completion_tokens: {token_stats.get('completion_tokens', 0)}\n")
-            mf.write(f"total_tokens: {token_stats.get('total_tokens', 0)}\n")
-            mf.write(f"model: {llm.model}\n")
-            mf.write(f"runtime_seconds: {elapsed:.2f}\n")
+
+        save_metrics_result(
+            str(output_file),
+            str(metrics_txt),
+            run_info={
+                "dataset": dataset,
+                "model": llm.model,
+                "prompt_tokens": token_stats.get("prompt_tokens", 0),
+                "completion_tokens": token_stats.get("completion_tokens", 0),
+                "total_tokens": token_stats.get("total_tokens", 0),
+                "runtime_seconds": elapsed,
+            },
+        )
 
         print(f"[metrics] saved to: {metrics_txt}")
     except Exception as e:

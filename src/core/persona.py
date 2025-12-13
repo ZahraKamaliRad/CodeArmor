@@ -9,8 +9,9 @@ from .analyzer import analyze_code
 from ..utils.tokens import get_token_stats
 
 
-PROMPT_TEMPLATE = """You are a code generator.
-You will be given:
+PROMPT_TEMPLATE = """You are a software security expert specializing in secure development.
+Think through potential security risks internally and apply secure design practices.
+Generate secure code for the following:
 - Prompt: {Prompt}
 Task: Implement the function or code that fulfills the Prompt in {Language}.
 Return only raw source code (no explanations, no markdown, no comments outside code).
@@ -25,7 +26,7 @@ def strip_markdown_fences(s: str) -> str:
     return s.strip()
 
 
-def GenerateCode(records,dataset: str, technique: str, limit: int | None = None,output_filename: str | None = None):
+def persona_gen_code(records,dataset: str,technique: str,limit: int | None = None,output_filename: str | None = None):
     start_time = time.time()
     llm = LLMClient()
     model_tag = sanitize_model_name(llm.model)
@@ -74,6 +75,7 @@ def GenerateCode(records,dataset: str, technique: str, limit: int | None = None,
                     "task": t.get("ID"),
                     "language": lang,
                     "framework": t.get("framework"),
+                    "technique": technique,
                     "code": "",
                     "error": "generation_failed",
                     "issues": [],
@@ -87,6 +89,7 @@ def GenerateCode(records,dataset: str, technique: str, limit: int | None = None,
                     "task": t.get("ID"),
                     "language": lang,
                     "framework": t.get("framework"),
+                    "technique": technique,
                     "code": raw_resp,
                     "issues": issues,
                     "loc": loc,

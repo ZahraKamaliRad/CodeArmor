@@ -3,8 +3,8 @@ from pathlib import Path
 from string import Template
 import json, re, time
 
-from .openai_client import LLMClient,sanitize_model_name
-from ..config import PATHS
+from .openai_client import LLMClient, sanitize_model_name
+from src.paths import PATHS
 from ..utils.metrics import save_metrics_result
 from ..utils.tokens import get_token_stats
 from .analyzer import analyze_code
@@ -56,7 +56,7 @@ import yaml
 
 def yaml_load(filename):
     '''
-    Use the filename variable to open a file, 
+    Use the filename variable to open a file,
     load its contents into a variable with yaml, and return it.
     '''
 
@@ -104,10 +104,6 @@ You are a secure code generator.
 Return ONLY executable source code. No explanations, no markdown, no comments, no docstrings.
 
 Implement the INTENT by following the PLAN strictly and completely.
-- Implement the algorithm steps.
-- Enforce the acceptance_criteria.
-- Use ONLY the APIs listed in secure_apis.
-- Implement the behaviors listed in error_handling.
 
 PLAN
 -----
@@ -119,16 +115,22 @@ $intent
 """)
 
 
-def PlanningB_gen_code(records,dataset_name: str = "output_planning",limit: int | None = None,
-    output_filename: str | None = None,):
+def PlanningB_gen_code(
+    records,
+    dataset: str,
+    technique: str,
+    limit: int | None = None,
+    output_filename: str | None = None,
+):
     start_time = time.time()
-    llm = LLMClient(api_key="")
+    llm = LLMClient()
     model_tag = sanitize_model_name(llm.model)
-    run_name = f"{dataset_name}_{model_tag}"
-    out_dir = PATHS.dataset_run_dir(run_name)
-    dataset_name = out_dir.name
+
+    out_dir = PATHS.run_dir(dataset=dataset, model_name=model_tag, technique=technique)
+
     if output_filename is None:
-        output_filename = f"{dataset_name}.jsonl"
+        output_filename = f"{dataset}.jsonl"
+
     output_file = out_dir / output_filename
 
     if not isinstance(records, list):
@@ -158,6 +160,7 @@ def PlanningB_gen_code(records,dataset_name: str = "output_planning",limit: int 
                     "task": task_name,
                     "language": lang_key,
                     "framework": t.get("framework"),
+                    "technique": technique,
                     "plan": "",
                     "code": "",
                     "error": "planning_failed",
@@ -166,7 +169,6 @@ def PlanningB_gen_code(records,dataset_name: str = "output_planning",limit: int 
                     "secure": False,
                 }
                 parsed["bandit_result"] = {"secure": parsed["secure"], "issues": parsed["issues"]}
-
                 f.write(json.dumps(parsed, ensure_ascii=False) + "\n")
                 f.flush()
                 continue
@@ -186,6 +188,7 @@ def PlanningB_gen_code(records,dataset_name: str = "output_planning",limit: int 
                     "task": task_name,
                     "language": lang_key,
                     "framework": t.get("framework"),
+                    "technique": technique,
                     "plan": plan_text,
                     "code": "",
                     "error": "generation_failed",
@@ -201,6 +204,7 @@ def PlanningB_gen_code(records,dataset_name: str = "output_planning",limit: int 
                     "task": task_name,
                     "language": lang_key,
                     "framework": t.get("framework"),
+                    "technique": technique,
                     "plan": plan_text,
                     "code": code_clean,
                     "issues": issues,
@@ -209,26 +213,29 @@ def PlanningB_gen_code(records,dataset_name: str = "output_planning",limit: int 
                 }
 
             parsed["bandit_result"] = {"secure": parsed["secure"], "issues": parsed["issues"]}
-
             f.write(json.dumps(parsed, ensure_ascii=False) + "\n")
             f.flush()
 
     try:
         metrics_dir = out_dir / "rate" / "vuln_density"
+        metrics_dir.mkdir(parents=True, exist_ok=True)
         metrics_txt = metrics_dir / f"{Path(output_filename).stem}_metrics.txt"
-
-        save_metrics_result(str(output_file), str(metrics_txt))
 
         token_stats = get_token_stats()
         elapsed = time.time() - start_time
-        metrics_dir.mkdir(parents=True, exist_ok=True)
-        with metrics_txt.open("a", encoding="utf-8") as mf:
-            mf.write("\n")
-            mf.write(f"prompt_tokens: {token_stats.get('prompt_tokens', 0)}\n")
-            mf.write(f"completion_tokens: {token_stats.get('completion_tokens', 0)}\n")
-            mf.write(f"total_tokens: {token_stats.get('total_tokens', 0)}\n")
-            mf.write(f"model: {llm.model}\n")
-            mf.write(f"runtime_seconds: {elapsed:.2f}\n")
+
+        save_metrics_result(
+            str(output_file),
+            str(metrics_txt),
+            run_info={
+                "dataset": dataset,
+                "model": llm.model,
+                "prompt_tokens": token_stats.get("prompt_tokens", 0),
+                "completion_tokens": token_stats.get("completion_tokens", 0),
+                "total_tokens": token_stats.get("total_tokens", 0),
+                "runtime_seconds": elapsed,
+            },
+        )
 
         print(f"[metrics] saved to: {metrics_txt}")
     except Exception as e:

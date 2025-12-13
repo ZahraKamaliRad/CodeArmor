@@ -4,14 +4,15 @@ from pathlib import Path
 import json, re, time
 from typing import Any, Dict, List, Tuple
 from string import Template
-import time
-from .openai_client import LLMClient,sanitize_model_name
+
+from .openai_client import LLMClient, sanitize_model_name
 from .analyzer import analyze_code
-from ..config import PATHS
+from src.paths import PATHS
 from ..utils.io import csv_log
 from ..utils.plot_refinment import load_refinement_df, plot_totals, refinment_summary
 from ..utils.metrics import save_metrics_result
 from ..utils.tokens import get_token_stats
+
 
 PLANNING_TEMPLATE = Template("""
 You are a secure-coding planner.
@@ -33,7 +34,6 @@ Rules:
 Input Prompt:
 $problem
 """)
-
 
 
 CODING_TEMPLATE = (
@@ -92,7 +92,6 @@ def strip_markdown_fences(s: str) -> str:
 
 
 def extract_first_json(text: str) -> str:
-
     if not isinstance(text, str):
         return ""
     text = re.sub(r"^\s*```[\w-]*\s*|\s*```\s*$", "", text.strip(), flags=re.DOTALL)
@@ -129,11 +128,11 @@ def parse_and_validate_plan(raw: str) -> Tuple[Dict[str, Any], List[str]]:
         obj = json.loads(blob)
     except Exception as e:
         return {}, [f"Invalid JSON from model: {e}"]
-    
+
     for k in REQUIRED_KEYS:
         if k not in obj:
             warns.append(f"Missing key: {k}")
-            if k in ("threats","algorithm","secure_apis","error_handling","acceptance_criteria"):
+            if k in ("threats", "algorithm", "secure_apis", "error_handling", "acceptance_criteria"):
                 obj[k] = []
             elif k == "policy":
                 obj[k] = {}
@@ -156,7 +155,7 @@ def parse_and_validate_plan(raw: str) -> Tuple[Dict[str, Any], List[str]]:
         cleaned.append(s.strip())
     obj["algorithm"] = cleaned
 
-    obj["summary"] = str(obj.get("summary",""))[:200].split('\n')[0].strip()
+    obj["summary"] = str(obj.get("summary", ""))[:200].split('\n')[0].strip()
     return obj, warns
 
 
@@ -189,12 +188,21 @@ def summarize_for_coder(plan_obj: Dict[str, Any]) -> str:
     return "SECURITY_GUIDANCE:\n" + "\n".join("- " + ln for ln in lines) if lines else "SECURITY_GUIDANCE:\n- (none)"
 
 
-
 def strip_md(s: str) -> str:
     return strip_markdown_fences(s)
 
-def attempt_repair_loop(llm: "LLMClient",code: str,issues: List[Dict[str, Any]],plan_obj: Dict[str, Any],
-    lang: str,task_id: str,iterations: int = 0,history: list | None = None,run_out_dir: str = "") -> Tuple[str, List[Dict[str, Any]], bool, int]:
+
+def attempt_repair_loop(
+    llm: "LLMClient",
+    code: str,
+    issues: List[Dict[str, Any]],
+    plan_obj: Dict[str, Any],
+    lang: str,
+    task_id: str,
+    iterations: int = 0,
+    history: list | None = None,
+    run_out_dir: str = "",
+) -> Tuple[str, List[Dict[str, Any]], bool, int]:
     current_code = code
     current_issues = issues
     rounds = 0
@@ -206,10 +214,10 @@ def attempt_repair_loop(llm: "LLMClient",code: str,issues: List[Dict[str, Any]],
     if len(current_issues) == 0:
         print(f"[{task_id}] No issues found. Skipping repair loop.")
         return current_code, current_issues, success, rounds
-    
+
     print(f"[{task_id}] Starting repair loop with {len(current_issues)} issues...")
 
-    for r in range(1,max(0,int(iterations)) + 1):
+    for r in range(1, max(0, int(iterations)) + 1):
         rounds = r
         print(f"[{task_id}] Iteration = {r}")
 
@@ -222,21 +230,19 @@ def attempt_repair_loop(llm: "LLMClient",code: str,issues: List[Dict[str, Any]],
         try:
             fixed_raw = llm.generate_text(prompt).strip()
         except Exception as e:
-            print(f"[{task_id}] [Error] LLM  generation failed: {e}")
+            print(f"[{task_id}] [Error] LLM generation failed: {e}")
             break
 
         fixed_code = strip_md(fixed_raw)
 
         if fixed_code == current_code:
-            csv_log(run_out_dir=run_out_dir, task_id=str(task_id),
-                           iter_idx=r, language=lang, issues=current_issues)
+            csv_log(run_out_dir=run_out_dir, task_id=str(task_id), iter_idx=r, language=lang, issues=current_issues)
             history.append({"iter": r, "issues": current_issues})
             print(f"[{task_id}] No changes detected. Breaking repair loop.")
             break
 
         new_issues, _ = analyze_code(fixed_code, lang, tmpname=f"{task_id}_iter{r}")
-        csv_log(run_out_dir=run_out_dir, task_id=str(task_id),
-                       iter_idx=r, language=lang, issues=new_issues)
+        csv_log(run_out_dir=run_out_dir, task_id=str(task_id), iter_idx=r, language=lang, issues=new_issues)
         history.append({"iter": r, "issues": new_issues})
         current_code, current_issues = fixed_code, new_issues
 
@@ -250,157 +256,163 @@ def attempt_repair_loop(llm: "LLMClient",code: str,issues: List[Dict[str, Any]],
     print(f"[{task_id}] Repair loop finished after {rounds} rounds. Remaining issues: {len(current_issues)}")
     return current_code, current_issues, success, rounds
 
-def run_framework(records, dataset_name: str = "output", limit: int | None = None, save_plans: bool = True, iterations: int = 0, output_filename: str | None = None):
+
+def run_framework(records,dataset: str,technique: str,limit: int | None = None,
+    save_plans: bool = True,iterations: int = 0,output_filename: str | None = None):
     start_time = time.time()
-    llm = LLMClient(api_key="sk-Gr8Sna1pUqdHJ11APRNLDBtcugQqujqBWbAEeGOisXxIMBY5")
+    llm = LLMClient()
     model_tag = sanitize_model_name(llm.model)
-    run_name = f"{dataset_name}_{model_tag}"
-    out_dir = PATHS.dataset_run_dir(run_name)
+
+    out_dir = PATHS.run_dir(dataset=dataset, model_name=model_tag, technique=technique)
+
     if output_filename is None:
-        output_filename = f"{out_dir.name}.jsonl"
+        output_filename = f"{dataset}.jsonl"
+
     output_file = out_dir / output_filename
     plans_file = out_dir / f"{Path(output_filename).stem}_plans.jsonl"
-    with output_file.open("a", encoding="utf-8") as outf:
-        pfile = plans_file.open("a", encoding="utf-8") if save_plans else None
 
-        for idx, t in enumerate(records, 1):
-            if limit is not None and idx > limit:
-                break
-
-            lang = (t.get("language") or "python").strip()
-            lang_title = "Python" if lang.lower().startswith("py") else "C" if lang.lower().startswith("c") else lang
-            task_id = t.get("ID")
-            dataset_prompt = t.get("Prompt", "")
-
-            print(f"=== Planning task {idx}: {task_id} [{lang_title}] ===")
-
-            plan_prompt = build_planning_prompt(dataset_prompt)
-            try:
-                plan_raw = llm.generate_text(plan_prompt).strip()
-            except Exception as e:
-                print(f"[Error] planning failed: {e}")
-                plan_raw = "{}"
-
-            plan_obj, warns = parse_and_validate_plan(plan_raw)
-
-            for w in warns:
-                print(f"[Warn] {task_id}: {w}")
-
-            if pfile:
-                pfile.write(json.dumps({"task": task_id, "plan_raw": plan_raw, "plan": plan_obj}, ensure_ascii=False) + "\n")
-                pfile.flush()
-
-            guide_for_coder = summarize_for_coder(minimal_plan(plan_obj))
-            bundle = {
-                "plan": minimal_plan(plan_obj),
-                "guide": guide_for_coder,
-                "task": dataset_prompt,
-                "language": lang,
-            }
-            final_prompt = CODING_TEMPLATE.format(Prompt=json.dumps(bundle, ensure_ascii=False))
-
-            print(f"=== Coding task {idx}: {task_id} ===")
-            raw_resp: str | None = None
-            for attempt in range(3):
-                try:
-                    raw_resp = llm.generate_text(final_prompt).strip()
+    pfile = plans_file.open("a", encoding="utf-8") if save_plans else None
+    try:
+        with output_file.open("a", encoding="utf-8") as outf:
+            for idx, t in enumerate(records, 1):
+                if limit is not None and idx > limit:
                     break
+
+                lang = (t.get("language") or "python").strip()
+                lang_title = "Python" if lang.lower().startswith("py") else "C" if lang.lower().startswith("c") else lang
+                task_id = t.get("ID")
+                dataset_prompt = t.get("Prompt", "")
+
+                print(f"=== Planning task {idx}: {task_id} [{lang_title}] ===")
+
+                plan_prompt = build_planning_prompt(dataset_prompt)
+                try:
+                    plan_raw = llm.generate_text(plan_prompt).strip()
                 except Exception as e:
-                    msg = str(e)
-                    if "502" in msg or "Bad Gateway" in msg or "InternalServerError" in msg or "timeout" in msg:
-                        wait = 2 ** attempt
-                        print(f"[Warn] transient error. Retrying in {wait}s (attempt {attempt+1}/3)...")
-                        time.sleep(wait)
-                        continue
-                    else:
+                    print(f"[Error] planning failed: {e}")
+                    plan_raw = "{}"
+
+                plan_obj, warns = parse_and_validate_plan(plan_raw)
+                for w in warns:
+                    print(f"[Warn] {task_id}: {w}")
+
+                if pfile:
+                    pfile.write(json.dumps({"task": task_id, "plan_raw": plan_raw, "plan": plan_obj}, ensure_ascii=False) + "\n")
+                    pfile.flush()
+
+                guide_for_coder = summarize_for_coder(minimal_plan(plan_obj))
+                bundle = {
+                    "plan": minimal_plan(plan_obj),
+                    "guide": guide_for_coder,
+                    "task": dataset_prompt,
+                    "language": lang,
+                }
+                final_prompt = CODING_TEMPLATE.format(Prompt=json.dumps(bundle, ensure_ascii=False))
+
+                print(f"=== Coding task {idx}: {task_id} ===")
+                raw_resp: str | None = None
+                for attempt in range(3):
+                    try:
+                        raw_resp = llm.generate_text(final_prompt).strip()
+                        break
+                    except Exception as e:
+                        msg = str(e)
+                        if "502" in msg or "Bad Gateway" in msg or "InternalServerError" in msg or "timeout" in msg:
+                            wait = 2 ** attempt
+                            print(f"[Warn] transient error. Retrying in {wait}s (attempt {attempt+1}/3)...")
+                            time.sleep(wait)
+                            continue
                         print(f"[Error] {e}")
                         break
 
-            if raw_resp is None:
-                parsed = {
-                    "task": task_id,
-                    "language": lang,
-                    "framework": t.get("framework"),
-                    "code": "",
-                    "error": "generation_failed",
-                    "issues": [],
-                    "loc": 0,
-                    "secure": False,
-                    "plan": minimal_plan(plan_obj),
-                    "repair": {"success": False, "rounds": 0},
-                }
-            else:
-                code = strip_markdown_fences(raw_resp)
-                issues, loc = analyze_code(code, lang, tmpname=task_id)
-                csv_log(
-                    run_out_dir=str(out_dir),
-                    task_id=str(task_id),
-                    iter_idx=0,
-                    language=lang,
-                    issues=issues
-                )
-                final_code, final_issues, final_loc = code, issues, loc
-                repair_summary = {"success": False, "rounds": 0}
-                if len(issues) > 0 and iterations > 0:
-                    fixed_code, issues_after, success, rounds = attempt_repair_loop(
-                        llm=llm,
-                        code=code,
-                        issues=issues,
-                        plan_obj=plan_obj,
-                        lang=lang,
-                        task_id=task_id,
-                        iterations=int(iterations),
-                        run_out_dir=str(out_dir)
-                    )
-                    final_code, final_issues = fixed_code, issues_after
-                    _, final_loc = analyze_code(final_code, lang, tmpname=f"{task_id}_final")
-                    repair_summary = {"success": bool(success), "rounds": int(rounds)}
+                if raw_resp is None:
+                    parsed = {
+                        "task": task_id,
+                        "language": lang,
+                        "framework": t.get("framework"),
+                        "technique": technique,
+                        "code": "",
+                        "error": "generation_failed",
+                        "issues": [],
+                        "loc": 0,
+                        "secure": False,
+                        "plan": minimal_plan(plan_obj),
+                        "repair": {"success": False, "rounds": 0},
+                    }
+                else:
+                    code = strip_markdown_fences(raw_resp)
+                    issues, loc = analyze_code(code, lang, tmpname=task_id)
+                    csv_log(run_out_dir=str(out_dir), task_id=str(task_id), iter_idx=0, language=lang, issues=issues)
 
-                parsed = {
-                    "task": task_id,
-                    "language": lang,
-                    "framework": t.get("framework"),
-                    "code": final_code,
-                    "issues": final_issues,
-                    "loc": final_loc,
-                    "secure": len(final_issues) == 0,
-                    "plan": minimal_plan(plan_obj),
-                    "repair": repair_summary
-                }
+                    final_code, final_issues, final_loc = code, issues, loc
+                    repair_summary = {"success": False, "rounds": 0}
 
-            parsed["bandit_result"] = {"secure": parsed["secure"], "issues": parsed["issues"]}
+                    if len(issues) > 0 and iterations > 0:
+                        fixed_code, issues_after, success, rounds = attempt_repair_loop(
+                            llm=llm,
+                            code=code,
+                            issues=issues,
+                            plan_obj=plan_obj,
+                            lang=lang,
+                            task_id=task_id,
+                            iterations=int(iterations),
+                            run_out_dir=str(out_dir),
+                        )
+                        final_code, final_issues = fixed_code, issues_after
+                        _, final_loc = analyze_code(final_code, lang, tmpname=f"{task_id}_final")
+                        repair_summary = {"success": bool(success), "rounds": int(rounds)}
 
-            outf.write(json.dumps(parsed, ensure_ascii=False) + "\n")
-            outf.flush()
+                    parsed = {
+                        "task": task_id,
+                        "language": lang,
+                        "framework": t.get("framework"),
+                        "technique": technique,
+                        "code": final_code,
+                        "issues": final_issues,
+                        "loc": final_loc,
+                        "secure": len(final_issues) == 0,
+                        "plan": minimal_plan(plan_obj),
+                        "repair": repair_summary,
+                    }
 
+                parsed["bandit_result"] = {"secure": parsed["secure"], "issues": parsed["issues"]}
+                outf.write(json.dumps(parsed, ensure_ascii=False) + "\n")
+                outf.flush()
+    finally:
         if pfile:
             pfile.close()
 
+    csv_path = out_dir / "Effect_Of_Refinment.csv"
 
-        csv_path = out_dir / "Effect_Of_Refinment.csv"
     try:
         metrics_dir = out_dir / "rate" / "vuln_density"
+        metrics_dir.mkdir(parents=True, exist_ok=True)
         metrics_txt = metrics_dir / f"{Path(output_filename).stem}_metrics.txt"
 
-        save_metrics_result(str(output_file), str(metrics_txt))
+        token_stats = get_token_stats()
+        elapsed = time.time() - start_time
+
+        save_metrics_result(
+            str(output_file),
+            str(metrics_txt),
+            run_info={
+                "dataset": dataset,
+                "model": llm.model,
+                "prompt_tokens": token_stats.get("prompt_tokens", 0),
+                "completion_tokens": token_stats.get("completion_tokens", 0),
+                "total_tokens": token_stats.get("total_tokens", 0),
+                "runtime_seconds": elapsed,
+                "iterations": int(iterations),
+                "save_plans": bool(save_plans),
+            },
+        )
 
         if csv_path.exists():
             df = load_refinement_df(csv_path)
             out_img = out_dir / "plots" / "Refinment_Plot.png"
+            out_img.parent.mkdir(parents=True, exist_ok=True)
             plot_totals(csv_path, out=out_img, kind="line", show=False, df=df, verbose=False)
             refinment_summary(csv_path, metrics_txt=metrics_txt, df=df, write=True)
-
-        token_stats = get_token_stats()
-        metrics_dir.mkdir(parents=True, exist_ok=True)
-        elapsed = time.time() - start_time
-        with metrics_txt.open("a", encoding="utf-8") as mf:
-            mf.write("\n")
-            mf.write(f"prompt_tokens: {token_stats.get('prompt_tokens', 0)}\n")
-            mf.write(f"completion_tokens: {token_stats.get('completion_tokens', 0)}\n")
-            mf.write(f"total_tokens: {token_stats.get('total_tokens', 0)}\n")
-            mf.write(f"model: {llm.model}\n") 
-            mf.write(f"runtime_seconds: {elapsed:.2f}\n")
-
 
         print(f"[metrics] saved to: {metrics_txt}")
     except Exception as e:
