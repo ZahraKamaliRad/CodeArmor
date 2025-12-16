@@ -45,10 +45,14 @@ def GenerateCode(records,dataset: str, technique: str, limit: int | None = None,
             lang = (t.get("language") or "python").strip().lower()
             if lang.startswith("py"):
                 lang_title = "Python"
+                lang = "python"
             elif lang.startswith("cpp") or "c++" in lang:
                 lang_title = "C++"
+                lang = "c"
             else:
                 lang_title = "C"
+                lang = "c"
+
 
             prompt = PROMPT_TEMPLATE.format(Prompt=t.get("Prompt", ""), Language=lang_title)
             print(f"=== Running task {idx}: {t.get('ID')} [{lang_title}] ===")
@@ -82,7 +86,9 @@ def GenerateCode(records,dataset: str, technique: str, limit: int | None = None,
                 }
             else:
                 raw_resp = strip_markdown_fences(raw_resp)
-                issues, loc = analyze_code(raw_resp, lang, tmpname=t.get("ID"))
+                tmpname = Path(t.get("ID") or "snippet").stem
+                issues, loc, summary = analyze_code(raw_resp, lang, tmpname=tmpname)
+
                 parsed = {
                     "task": t.get("ID"),
                     "language": lang,
@@ -90,10 +96,15 @@ def GenerateCode(records,dataset: str, technique: str, limit: int | None = None,
                     "code": raw_resp,
                     "issues": issues,
                     "loc": loc,
-                    "secure": len(issues) == 0,
+                    "secure": summary["secure"],
+                    "unique_vulnerabilities": summary["unique_vulnerabilities"],
+                    "tool_issue_counts": summary["tool_issue_counts"],
+                    "tools": summary["tools"]
                 }
 
-            parsed["bandit_result"] = {"secure": parsed["secure"], "issues": parsed["issues"]}
+                #parsed["analysis_result"] = {"secure": parsed["secure"], "issues": parsed["issues"]}
+
+
 
             f.write(json.dumps(parsed, ensure_ascii=False) + "\n")
             f.flush()
