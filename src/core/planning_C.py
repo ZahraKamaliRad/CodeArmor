@@ -3,12 +3,16 @@ from pathlib import Path
 import json
 import re
 import time
-
+from string import Template
+from typing import Any, Dict, List, Tuple
 from .openai_client import LLMClient, sanitize_model_name
 from src.paths import PATHS
 from ..utils.metrics import save_metrics_result
-from .analyzer import analyze_code
+from .analyzer import analyze_code_split
 from ..utils.tokens import get_token_stats
+from ..utils.io import csv_log
+from ..utils.plot_refinment import load_refinement_df, plot_totals, refinment_summary
+
 
 
 PLANNING_PROMPT = """
@@ -70,6 +74,28 @@ Return ONLY source code, with no explanations or markdown.
 """
 
 
+REPAIR_PROMPT_TEMPLATE = Template(
+"""
+You are a secure-coding assistant.
+
+TARGET_ANALYZER: $analyzer
+LANGUAGE: $language
+
+ANALYZER_ISSUES(JSON):
+$issues_json
+
+CURRENT_CODE:
+```$language
+$code
+```
+
+Task:
+- Fix the security issues reported by TARGET_ANALYZER.
+- Preserve functionality.
+- Return ONLY the updated full code (no explanations).
+"""
+)
+
 def strip_markdown_fences(s: str) -> str:
     if not isinstance(s, str):
         return s
@@ -94,7 +120,85 @@ def extract_code(resp: str) -> str:
     return resp.strip()
 
 
-def planningC_gen_code(records,dataset: str,technique: str,limit: int | None = None,output_filename: str | None = None) -> str:
+
+def run_two_analyzers(code: str, lang: str, tmpname: str = "snippet") -> Dict[str, Any]:
+    scan = analyze_code_split(code, lang, tmpname=tmpname) or {}
+    loc = int(scan.get("loc") or 0)
+
+    bandit_block = scan.get("bandit_result") or {}
+    semgrep_block = scan.get("semgrep_result") or {}
+
+    bandit_issues = bandit_block.get("issues") or []
+    semgrep_issues = semgrep_block.get("issues") or []
+
+    bandit_secure = bool(bandit_block.get("secure", len(bandit_issues) == 0))
+    semgrep_secure = bool(semgrep_block.get("secure", len(semgrep_issues) == 0))
+
+    return {
+        "loc": loc,
+        "bandit_result": {
+            "secure": bandit_secure,
+            "issues": bandit_issues,
+            "summary": bandit_block.get("summary") or {},
+        },
+        "semgrep_result": {
+            "secure": semgrep_secure,
+            "issues": semgrep_issues,
+            "summary": semgrep_block.get("summary") or {},
+        },
+        "secure_all": bool(bandit_secure and semgrep_secure)
+    }
+
+def attempt_repair_loop(llm: Any, code: str, lang: str, task_name: str, iterations: int, run_out_dir: str) -> Tuple[str, Dict[str, Any]]:
+    current_code = code
+
+    for r in range(max(0, int(iterations))):
+        pre = run_two_analyzers(current_code, lang, tmpname=f"{task_name}_iter{r}_pre")
+        b_issues = pre["bandit_result"]["issues"]
+        s_issues = pre["semgrep_result"]["issues"]
+
+        if pre.get("secure_all", (len(b_issues) == 0 and len(s_issues) == 0)):
+            return current_code, pre
+
+        if len(b_issues) >= len(s_issues):
+            target = "bandit"
+            chosen_issues = b_issues
+        else:
+            target = "semgrep"
+            chosen_issues = s_issues
+
+        if not chosen_issues:
+            return current_code, pre
+
+        prompt = REPAIR_PROMPT_TEMPLATE.substitute(analyzer=target,language=lang,
+        issues_json=json.dumps(chosen_issues, ensure_ascii=False),code=current_code)
+        
+        try:
+            resp = llm.generate_text(prompt).strip()
+        except Exception:
+            csv_log(run_out_dir=run_out_dir, task_id=f"{task_name}#bandit", iter_idx=r + 1, language=lang, issues=b_issues)
+            csv_log(run_out_dir=run_out_dir, task_id=f"{task_name}#semgrep", iter_idx=r + 1, language=lang, issues=s_issues)
+            return current_code, pre
+
+        fixed = extract_code(resp)
+        fixed = strip_markdown_fences(fixed)
+
+        if fixed and fixed != current_code:
+            current_code = fixed
+
+        post = run_two_analyzers(current_code, lang, tmpname=f"{task_name}_iter{r}_post")
+        csv_log(run_out_dir=run_out_dir, task_id=f"{task_name}#bandit", iter_idx=r + 1, language=lang, issues=post["bandit_result"]["issues"])
+        csv_log(run_out_dir=run_out_dir, task_id=f"{task_name}#semgrep", iter_idx=r + 1, language=lang, issues=post["semgrep_result"]["issues"])
+
+        if post.get("secure_all", (len(post["bandit_result"]["issues"]) == 0 and len(post["semgrep_result"]["issues"]) == 0)):
+            return current_code, post
+
+    final_scan = run_two_analyzers(current_code, lang, tmpname=f"{task_name}_final")
+    return current_code, final_scan
+
+
+
+def planningC_gen_code(records,dataset: str,technique: str,limit: int | None = None,iterations: int = 0,output_filename: str | None = None) -> str:
     start_time = time.time()
     llm = LLMClient()
     model_tag = sanitize_model_name(llm.model)
@@ -134,7 +238,6 @@ def planningC_gen_code(records,dataset: str,technique: str,limit: int | None = N
             )
 
             intent_text = t.get("Prompt", "") or ""
-
             planning_prompt = PLANNING_PROMPT.format(Prompt=intent_text, Language=lang_title)
 
             print(f"=== Task {idx}: {task_name} [{lang_title}] ===")
@@ -164,22 +267,26 @@ def planningC_gen_code(records,dataset: str,technique: str,limit: int | None = N
                     print(f"[Error][planning] {e}")
                     break
 
+            bandit_result = {}
+            semgrep_result = {}
+            plan_text = ""
+
             if plan_resp is None:
                 parsed = {
                     "task": task_name,
+                    "intent": intent_text,
                     "language": lang_key,
                     "framework": t.get("framework"),
                     "technique": technique,
                     "plan": "",
                     "code": "",
                     "error": "planning_failed",
-                    "issues": [],
+                    "issues": {"bandit": [], "semgrep": []},
                     "loc": 0,
-                    "secure": False,
+                    "secure": False
                 }
             else:
                 plan_text = plan_resp.strip()
-
                 coding_prompt = CODING_PROMPT.format(Language=lang_title, Prompt=intent_text, Plan=plan_text)
 
                 print("--- Coding stage ---")
@@ -211,33 +318,50 @@ def planningC_gen_code(records,dataset: str,technique: str,limit: int | None = N
                 if code_resp is None:
                     parsed = {
                         "task": task_name,
+                        "intent": intent_text,
                         "language": lang_key,
                         "framework": t.get("framework"),
                         "technique": technique,
                         "plan": plan_text,
                         "code": "",
                         "error": "generation_failed",
-                        "issues": [],
+                        "issues": {"bandit": [], "semgrep": []},
                         "loc": 0,
-                        "secure": False,
+                        "secure": False
                     }
                 else:
                     code_text = extract_code(code_resp)
                     code_text = strip_markdown_fences(code_text)
-                    issues, loc = analyze_code(code_text, lang_key, tmpname=task_name)
+                    scan0 = run_two_analyzers(code_text, lang_key, tmpname=task_name)
+                    csv_log(run_out_dir=str(out_dir), task_id=f"{task_name}#bandit", iter_idx=0, language=lang_key, issues=scan0["bandit_result"]["issues"])
+                    csv_log(run_out_dir=str(out_dir), task_id=f"{task_name}#semgrep", iter_idx=0, language=lang_key, issues=scan0["semgrep_result"]["issues"])
+                    loc = int(scan0.get("loc") or 0)
+                    if int(iterations) > 0 and not bool(scan0.get("secure_all", True)):
+                        code_text, scan0 = attempt_repair_loop(llm=llm,code=code_text,lang=lang_key,
+                        task_name=task_name,iterations=iterations,run_out_dir=str(out_dir))
+                        loc = int(scan0.get("loc") or loc)
+                    bandit_result = scan0.get("bandit_result") or {}
+                    semgrep_result = scan0.get("semgrep_result") or {}
+                    secure_all = bool(scan0.get("secure_all", False))
+
                     parsed = {
                         "task": task_name,
+                        "intent": intent_text,
                         "language": lang_key,
                         "framework": t.get("framework"),
                         "technique": technique,
                         "plan": plan_text,
                         "code": code_text,
-                        "issues": issues,
+                        "issues": {
+                            "bandit": bandit_result.get("issues") or [],
+                            "semgrep": semgrep_result.get("issues") or []
+                        },
                         "loc": loc,
-                        "secure": len(issues) == 0,
+                        "secure": secure_all
                     }
 
-            parsed["bandit_result"] = {"secure": parsed["secure"], "issues": parsed["issues"]}
+            parsed["bandit_result"] = bandit_result
+            parsed["semgrep_result"] = semgrep_result
             f.write(json.dumps(parsed, ensure_ascii=False) + "\n")
             f.flush()
 
@@ -258,9 +382,16 @@ def planningC_gen_code(records,dataset: str,technique: str,limit: int | None = N
                 "prompt_tokens": token_stats.get("prompt_tokens", 0),
                 "completion_tokens": token_stats.get("completion_tokens", 0),
                 "total_tokens": token_stats.get("total_tokens", 0),
-                "runtime_seconds": elapsed,
-            },
+                "runtime_seconds": elapsed
+            }
         )
+        csv_path = out_dir / "Effect_Of_Refinment.csv"
+        if csv_path.exists():
+            df = load_refinement_df(csv_path)
+            out_img = out_dir / "plots" / "Refinment_Plot.png"
+            out_img.parent.mkdir(parents=True, exist_ok=True)
+            plot_totals(csv_path, out=out_img, kind="line", show=False, df=df, verbose=False)
+            refinment_summary(csv_path, metrics_txt=metrics_txt, df=df, write=True)
 
         print(f"[metrics] saved to: {metrics_txt}")
     except Exception as e:

@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Tuple
 from string import Template
 
 from .openai_client import LLMClient, sanitize_model_name
-from .analyzer import analyze_code
+from .analyzer import analyze_code_split
 from src.paths import PATHS
 from ..utils.io import csv_log
 from ..utils.plot_refinment import load_refinement_df, plot_totals, refinment_summary
@@ -57,7 +57,9 @@ REPAIR_PROMPT_TEMPLATE = Template(
 You are a SECURITY PATCH GENERATOR. Return ONLY the fixed source code (plain text). No explanations.
 
 CONTEXT (read-only, do not echo back):
-- SECURITY_GUIDANCE:\n$guide
+- SECURITY_GUIDANCE:
+$guide
+- TARGET_ANALYZER: $analyzer
 - ANALYZER_ISSUES(JSON): $bandit_json
 
 ORIGINAL CODE:
@@ -192,39 +194,105 @@ def strip_md(s: str) -> str:
     return strip_markdown_fences(s)
 
 
-def attempt_repair_loop(
-    llm: "LLMClient",
-    code: str,
-    issues: List[Dict[str, Any]],
-    plan_obj: Dict[str, Any],
-    lang: str,
-    task_id: str,
-    iterations: int = 0,
-    history: list | None = None,
-    run_out_dir: str = "",
-) -> Tuple[str, List[Dict[str, Any]], bool, int]:
+
+def _tag_issues(issues: List[Any], analyzer_name: str) -> List[Dict[str, Any]]:
+    tagged: List[Dict[str, Any]] = []
+    for it in issues or []:
+        if isinstance(it, dict):
+            d = dict(it)
+            d["_analyzer"] = analyzer_name
+            tagged.append(d)
+        else:
+            tagged.append({"_analyzer": analyzer_name, "raw": it})
+    return tagged
+
+
+def merge_issues(bandit_issues: List[Any], semgrep_issues: List[Any]) -> List[Dict[str, Any]]:
+    return _tag_issues(bandit_issues, "bandit") + _tag_issues(semgrep_issues, "semgrep")
+
+
+def run_two_analyzers(code: str, lang: str, tmpname: str = "snippet") -> Dict[str, Any]:
+    scan = analyze_code_split(code, lang, tmpname=tmpname) or {}
+    loc = int(scan.get("loc") or 0)
+
+    bandit_block = scan.get("bandit_result") or {}
+    semgrep_block = scan.get("semgrep_result") or {}
+
+    bandit_issues = bandit_block.get("issues") or []
+    semgrep_issues = semgrep_block.get("issues") or []
+
+    bandit_secure = bool(bandit_block.get("secure", len(bandit_issues) == 0))
+    semgrep_secure = bool(semgrep_block.get("secure", len(semgrep_issues) == 0))
+
+    return {
+        "loc": loc,
+        "bandit_result": {
+            "secure": bandit_secure,
+            "issues": bandit_issues,
+            "summary": bandit_block.get("summary") or {},
+        },
+        "semgrep_result": {
+            "secure": semgrep_secure,
+            "issues": semgrep_issues,
+            "summary": semgrep_block.get("summary") or {},
+        },
+        "secure": bool(bandit_secure and semgrep_secure),
+    }
+
+def attempt_repair_loop(llm: "LLMClient",code: str,issues: List[Dict[str, Any]],plan_obj: Dict[str, Any],lang: str,
+    task_id: str,iterations: int = 0,history: list | None = None,run_out_dir: str = "") -> Tuple[str, List[Dict[str, Any]], bool, int]:
     current_code = code
-    current_issues = issues
     rounds = 0
     success = False
+
     if history is None:
-        history = [{"iter": 0, "issues": issues}]
+        history = []
     guide = summarize_for_coder(minimal_plan(plan_obj))
+    scan0 = run_two_analyzers(current_code, lang, tmpname=str(task_id))
+    history.append(
+        {
+            "iter": 0,
+            "chosen": None,
+            "bandit_count": len(scan0["bandit_result"]["issues"]),
+            "semgrep_count": len(scan0["semgrep_result"]["issues"]),
+        }
+    )
 
-    if len(current_issues) == 0:
-        print(f"[{task_id}] No issues found. Skipping repair loop.")
-        return current_code, current_issues, success, rounds
+    if scan0["secure"]:
+        print(f"[{task_id}] No issues found (both analyzers clean). Skipping repair loop.")
+        return current_code, [], success, rounds
 
-    print(f"[{task_id}] Starting repair loop with {len(current_issues)} issues...")
+    print(
+        f"[{task_id}] Starting repair loop. bandit={len(scan0['bandit_result']['issues'])}, "
+        f"semgrep={len(scan0['semgrep_result']['issues'])}"
+    )
 
     for r in range(1, max(0, int(iterations)) + 1):
         rounds = r
-        print(f"[{task_id}] Iteration = {r}")
+
+        pre = run_two_analyzers(current_code, lang, tmpname=f"{task_id}_iter{r}_pre")
+        b_issues = pre["bandit_result"]["issues"] or []
+        s_issues = pre["semgrep_result"]["issues"] or []
+
+        if len(b_issues) == 0 and len(s_issues) == 0:
+            print(f"[{task_id}] All issues fixed at iteration {r-1}.")
+            success = True
+            return current_code, [], success, rounds
+
+        if len(b_issues) >= len(s_issues):
+            chosen = "bandit"
+            chosen_issues = b_issues
+        else:
+            chosen = "semgrep"
+            chosen_issues = s_issues
+
+        print(f"[{task_id}] Iteration={r} chosen_analyzer={chosen} (bandit={len(b_issues)}, semgrep={len(s_issues)})")
 
         prompt = REPAIR_PROMPT_TEMPLATE.substitute(
             guide=guide,
+            analyzer=chosen,
             code=current_code,
-            bandit_json=json.dumps(current_issues, ensure_ascii=False),
+            bandit_json=json.dumps(chosen_issues, ensure_ascii=False),
         )
 
         try:
@@ -236,26 +304,53 @@ def attempt_repair_loop(
         fixed_code = strip_md(fixed_raw)
 
         if fixed_code == current_code:
-            csv_log(run_out_dir=run_out_dir, task_id=str(task_id), iter_idx=r, language=lang, issues=current_issues)
-            history.append({"iter": r, "issues": current_issues})
+            csv_log(run_out_dir=run_out_dir, task_id=f"{task_id}#bandit", iter_idx=r, language=lang, issues=pre["bandit_result"]["issues"])
+            csv_log(run_out_dir=run_out_dir, task_id=f"{task_id}#semgrep", iter_idx=r, language=lang, issues=pre["semgrep_result"]["issues"])
+            history.append(
+                {
+                    "iter": r,
+                    "chosen": chosen,
+                    "bandit_count": len(b_issues),
+                    "semgrep_count": len(s_issues),
+                    "note": "no_changes",
+                }
+            )
             print(f"[{task_id}] No changes detected. Breaking repair loop.")
             break
 
-        new_issues, _ = analyze_code(fixed_code, lang, tmpname=f"{task_id}_iter{r}")
-        csv_log(run_out_dir=run_out_dir, task_id=str(task_id), iter_idx=r, language=lang, issues=new_issues)
-        history.append({"iter": r, "issues": new_issues})
-        current_code, current_issues = fixed_code, new_issues
+        post = run_two_analyzers(fixed_code, lang, tmpname=f"{task_id}_iter{r}_post")
 
-        if len(new_issues) == 0:
-            print(f"[{task_id}] All issues fixed at iteration {r}.")
+       
+        csv_log(run_out_dir=run_out_dir, task_id=f"{task_id}#bandit", iter_idx=r, language=lang, issues=post["bandit_result"]["issues"])
+        csv_log(run_out_dir=run_out_dir, task_id=f"{task_id}#semgrep", iter_idx=r, language=lang, issues=post["semgrep_result"]["issues"])
+
+        history.append(
+            {
+                "iter": r,
+                "chosen": chosen,
+                "bandit_count": len(post["bandit_result"]["issues"]),
+                "semgrep_count": len(post["semgrep_result"]["issues"]),
+            }
+        )
+
+        current_code = fixed_code
+
+        if post["secure"]:
+            print(f"[{task_id}] Both analyzers clean at iteration {r}.")
             success = True
-            return current_code, current_issues, success, rounds
+            return current_code, [], success, rounds
         else:
-            print(f"[{task_id}] Remaining issues after iteration {r}: {len(new_issues)}")
+            print(
+                f"[{task_id}] Remaining after iteration {r}: "
+                f"bandit={len(post['bandit_result']['issues'])}, semgrep={len(post['semgrep_result']['issues'])}"
+            )
 
-    print(f"[{task_id}] Repair loop finished after {rounds} rounds. Remaining issues: {len(current_issues)}")
-    return current_code, current_issues, success, rounds
-
+    final_scan = run_two_analyzers(current_code, lang, tmpname=f"{task_id}_final")
+    print(
+        f"[{task_id}] Repair loop finished after {rounds} rounds. Remaining: "
+        f"bandit={len(final_scan['bandit_result']['issues'])}, semgrep={len(final_scan['semgrep_result']['issues'])}"
+    )
+    return current_code, [], success, rounds
 
 def run_framework(records,dataset: str,technique: str,limit: int | None = None,
     save_plans: bool = True,iterations: int = 0,output_filename: str | None = None):
@@ -328,6 +423,7 @@ def run_framework(records,dataset: str,technique: str,limit: int | None = None,
                 if raw_resp is None:
                     parsed = {
                         "task": task_id,
+                        "intent" : dataset_prompt,
                         "language": lang,
                         "framework": t.get("framework"),
                         "technique": technique,
@@ -338,44 +434,49 @@ def run_framework(records,dataset: str,technique: str,limit: int | None = None,
                         "secure": False,
                         "plan": minimal_plan(plan_obj),
                         "repair": {"success": False, "rounds": 0},
+                        "bandit_result": {"secure": False, "issues": [], "summary": {}},
+                        "semgrep_result": {"secure": False, "issues": [], "summary": {}},
                     }
                 else:
                     code = strip_markdown_fences(raw_resp)
-                    issues, loc = analyze_code(code, lang, tmpname=task_id)
-                    csv_log(run_out_dir=str(out_dir), task_id=str(task_id), iter_idx=0, language=lang, issues=issues)
+                    scan0 = run_two_analyzers(code, lang, tmpname=task_id)
+                    csv_log(run_out_dir=str(out_dir), task_id=f"{task_id}#bandit", iter_idx=0, language=lang, issues=scan0["bandit_result"]["issues"])
+                    csv_log(run_out_dir=str(out_dir), task_id=f"{task_id}#semgrep", iter_idx=0, language=lang, issues=scan0["semgrep_result"]["issues"])
 
-                    final_code, final_issues, final_loc = code, issues, loc
+                    final_code = code
+                    final_scan = scan0
                     repair_summary = {"success": False, "rounds": 0}
 
-                    if len(issues) > 0 and iterations > 0:
-                        fixed_code, issues_after, success, rounds = attempt_repair_loop(
+                    if (not scan0["secure"]) and iterations > 0:
+                        fixed_code, _issues_after, success, rounds = attempt_repair_loop(
                             llm=llm,
                             code=code,
-                            issues=issues,
+                            issues=[],
                             plan_obj=plan_obj,
                             lang=lang,
                             task_id=task_id,
                             iterations=int(iterations),
-                            run_out_dir=str(out_dir),
+                            run_out_dir=str(out_dir)
                         )
-                        final_code, final_issues = fixed_code, issues_after
-                        _, final_loc = analyze_code(final_code, lang, tmpname=f"{task_id}_final")
+                        final_code = fixed_code
+                        final_scan = run_two_analyzers(final_code, lang, tmpname=f"{task_id}_final")
                         repair_summary = {"success": bool(success), "rounds": int(rounds)}
-
                     parsed = {
                         "task": task_id,
+                        "intent": dataset_prompt,
                         "language": lang,
                         "framework": t.get("framework"),
                         "technique": technique,
                         "code": final_code,
-                        "issues": final_issues,
-                        "loc": final_loc,
-                        "secure": len(final_issues) == 0,
+                        "issues": [],
+                        "loc": int(final_scan.get("loc") or 0),
+                        "secure": bool(final_scan.get("secure")),
+                        "bandit_result": final_scan.get("bandit_result") or {"secure": False, "issues": [], "summary": {}},
+                        "semgrep_result": final_scan.get("semgrep_result") or {"secure": False, "issues": [], "summary": {}},
                         "plan": minimal_plan(plan_obj),
                         "repair": repair_summary,
                     }
 
-                parsed["bandit_result"] = {"secure": parsed["secure"], "issues": parsed["issues"]}
                 outf.write(json.dumps(parsed, ensure_ascii=False) + "\n")
                 outf.flush()
     finally:
@@ -403,8 +504,8 @@ def run_framework(records,dataset: str,technique: str,limit: int | None = None,
                 "total_tokens": token_stats.get("total_tokens", 0),
                 "runtime_seconds": elapsed,
                 "iterations": int(iterations),
-                "save_plans": bool(save_plans),
-            },
+                "save_plans": bool(save_plans)
+            }
         )
 
         if csv_path.exists():

@@ -7,7 +7,7 @@ import time
 from .openai_client import LLMClient, sanitize_model_name
 from src.paths import PATHS
 from ..utils.metrics import save_metrics_result
-from .analyzer import analyze_code
+from .analyzer import analyze_code_split
 from ..utils.tokens import get_token_stats
 
 
@@ -25,26 +25,17 @@ def parse_xml(xml_string):
     '''
 
 Thinking step-by-step:
-
-If this function is implemented naively,several security risks appear.Using the default xml.etree.
-ElementTree parser on untrusted XML can allow processing of external entities or deeply nested entities,
-which enables XML External Entity (XXE) attacks and "billion laughs" style denial-of-service.
-A straightforward implementation might accept any object as xml_string and pass it directly to the parser without type checking,
-which can lead to unexpected behavior. Without explicit error handling, parser exceptions and detailed error messages may propagate to callers,
-potentially exposing internal parsing details or causing the application to crash when the XML is malformed.
+Explain risks briefly, then provide secure code.
 
 The secure Python code is:
-
 from defusedxml import ElementTree as ET
 def parse_xml(xml_string):
     if not isinstance(xml_string, str):
         raise TypeError("xml_string must be a string")
-
     try:
         root = ET.fromstring(xml_string)
     except ET.ParseError as exc:
         raise ValueError("Invalid XML input") from exc
-
     return root
 
 Now solve the next task in the same style.
@@ -69,17 +60,52 @@ def strip_markdown_fences(s: str) -> str:
 def extract_code(resp: str) -> str:
     if not isinstance(resp, str):
         return ""
-    matches = list(
+
+    blocks = list(
         re.finditer(
-            r"```(?:python)?\s*(.*?)```",
+            r"```(?:python|cpp|c|c\+\+)?\s*(.*?)```",
             resp,
-            re.DOTALL | re.IGNORECASE,
+            flags=re.DOTALL | re.IGNORECASE,
         )
     )
-    if matches:
-        code = matches[-1].group(1)
-        return code.strip()
+    if blocks:
+        return blocks[-1].group(1).strip()
+
+    m = re.search(r"\bThe secure .*? code is:\s*\n(.*)$", resp, flags=re.DOTALL | re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+
+    m = re.search(r"\bHere(?:'s| is)\s+the\s+secure\b.*?:\s*\n(.*)$", resp, flags=re.DOTALL | re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+
     return resp.strip()
+
+
+def extract_thinking(resp: str) -> str:
+    if not isinstance(resp, str):
+        return ""
+
+    m = re.search(
+        r"###\s*Risks.*?\n(.*?)(?=\n###\s*Secure Code|\nHere's the secure|\nHere is the secure|\n```)",
+        resp,
+        flags=re.DOTALL | re.IGNORECASE
+    )
+    if m:
+        return m.group(1).strip()
+
+    m = re.search(
+        r"(?:Thinking step-by-step|Thinking|Reasoning)\s*:\s*(.*)$",
+        resp,
+        flags=re.DOTALL | re.IGNORECASE
+    )
+    if m:
+        txt = m.group(1).strip()
+        txt = re.split(r"\n\s*(?:The secure|###\s*Secure Code|Here's the secure)", txt, flags=re.IGNORECASE)[0]
+        txt = re.split(r"\n\s*```", txt, maxsplit=1)[0]
+        return txt.strip()
+
+    return ""
 
 
 def cot_gen_code(records,dataset: str,technique: str,limit: int | None = None,output_filename: str | None = None) -> str:
@@ -88,6 +114,7 @@ def cot_gen_code(records,dataset: str,technique: str,limit: int | None = None,ou
     model_tag = sanitize_model_name(llm.model)
 
     out_dir = PATHS.run_dir(dataset=dataset, model_name=model_tag, technique=technique)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     if output_filename is None:
         output_filename = f"{dataset}.jsonl"
@@ -120,7 +147,6 @@ def cot_gen_code(records,dataset: str,technique: str,limit: int | None = None,ou
                 or t.get("file")
                 or f"task_{idx}"
             )
-
             intent_text = t.get("Prompt", "") or ""
             prompt = PROMPT_TEMPLATE.format(Prompt=intent_text, Language=lang_title)
 
@@ -141,47 +167,44 @@ def cot_gen_code(records,dataset: str,technique: str,limit: int | None = None,ou
                         or "overloaded" in msg
                     ):
                         wait = 2 ** attempt
-                        print(
-                            f"[Warn] transient LLM error. Retrying in {wait}s "
-                            f"(attempt {attempt+1}/3)..."
-                        )
                         time.sleep(wait)
                         continue
-                    else:
-                        print(f"[Error] {e}")
-                        break
+                    print(f"[Error] {e}")
+                    break
 
             if raw_resp is None:
                 parsed = {
                     "task": task_name,
+                    "intent": intent_text,
+                    "thinking": "",
                     "language": lang_key,
                     "framework": t.get("framework"),
                     "technique": technique,
                     "code": "",
                     "error": "generation_failed",
-                    "issues": [],
                     "loc": 0,
-                    "secure": False,
+                    "bandit_result": {"secure": False, "issues": []},
+                    "semgrep_result": {"secure": False, "issues": []}
                 }
             else:
-                code_text = extract_code(raw_resp)
-                code_text = strip_markdown_fences(code_text)
-                issues, loc = analyze_code(code_text, lang_key, tmpname=task_name)
+                thinking = extract_thinking(raw_resp)
+                code_text = strip_markdown_fences(extract_code(raw_resp))
+
+                tmpname = Path(str(task_name or "snippet")).stem
+                scan = analyze_code_split(code_text, lang_key, tmpname=tmpname)
+
                 parsed = {
                     "task": task_name,
+                    "intent": intent_text,
+                    "thinking": thinking,
                     "language": lang_key,
                     "framework": t.get("framework"),
                     "technique": technique,
                     "code": code_text,
-                    "issues": issues,
-                    "loc": loc,
-                    "secure": len(issues) == 0,
+                    "loc": int(scan.get("loc") or 0),
+                    "bandit_result": scan.get("bandit_result") or {"secure": True, "issues": []},
+                    "semgrep_result": scan.get("semgrep_result") or {"secure": True, "issues": []}
                 }
-
-            parsed["bandit_result"] = {
-                "secure": parsed["secure"],
-                "issues": parsed["issues"],
-            }
 
             f.write(json.dumps(parsed, ensure_ascii=False) + "\n")
             f.flush()
@@ -203,11 +226,9 @@ def cot_gen_code(records,dataset: str,technique: str,limit: int | None = None,ou
                 "prompt_tokens": token_stats.get("prompt_tokens", 0),
                 "completion_tokens": token_stats.get("completion_tokens", 0),
                 "total_tokens": token_stats.get("total_tokens", 0),
-                "runtime_seconds": elapsed,
-            },
+                "runtime_seconds": elapsed
+            }
         )
-
-        print(f"[metrics] saved to: {metrics_txt}")
     except Exception as e:
         print(f"[metrics-save] {e}")
 

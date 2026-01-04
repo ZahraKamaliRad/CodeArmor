@@ -1,11 +1,14 @@
 from __future__ import annotations
+
 from pathlib import Path
-import json, re, time
+import json
+import re
+import time
 
 from .openai_client import LLMClient, sanitize_model_name
 from src.paths import PATHS
 from ..utils.metrics import save_metrics_result
-from .analyzer import analyze_code
+from .analyzer import analyze_code_split
 from ..utils.tokens import get_token_stats
 
 
@@ -25,12 +28,13 @@ def strip_markdown_fences(s: str) -> str:
     return s.strip()
 
 
-def GenerateCode(records,dataset: str, technique: str, limit: int | None = None,output_filename: str | None = None):
+def GenerateCode(records, dataset: str, technique: str, limit: int | None = None, output_filename: str | None = None):
     start_time = time.time()
     llm = LLMClient()
     model_tag = sanitize_model_name(llm.model)
 
     out_dir = PATHS.run_dir(dataset=dataset, model_name=model_tag, technique=technique)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     if output_filename is None:
         output_filename = f"{dataset}.jsonl"
@@ -42,25 +46,27 @@ def GenerateCode(records,dataset: str, technique: str, limit: int | None = None,
             if limit is not None and idx > limit:
                 break
 
-            lang = (t.get("language") or "python").strip().lower()
-            if lang.startswith("py"):
+            lang_raw = (t.get("language") or "python").strip().lower()
+            if lang_raw.startswith("py"):
                 lang_title = "Python"
                 lang = "python"
-            elif lang.startswith("cpp") or "c++" in lang:
+            elif lang_raw.startswith("cpp") or "c++" in lang_raw:
                 lang_title = "C++"
                 lang = "c"
             else:
                 lang_title = "C"
                 lang = "c"
 
+            intent = t.get("Prompt", "") or ""
+            prompt_llm = PROMPT_TEMPLATE.format(Prompt=intent, Language=lang_title)
 
-            prompt = PROMPT_TEMPLATE.format(Prompt=t.get("Prompt", ""), Language=lang_title)
-            print(f"=== Running task {idx}: {t.get('ID')} [{lang_title}] ===")
+            task_id = t.get("ID")
+            print(f"=== Running task {idx}: {task_id} [{lang_title}] ===")
 
             raw_resp = None
             for attempt in range(3):
                 try:
-                    raw_resp = llm.generate_text(prompt).strip()
+                    raw_resp = llm.generate_text(prompt_llm).strip()
                     break
                 except Exception as e:
                     msg = str(e)
@@ -75,36 +81,42 @@ def GenerateCode(records,dataset: str, technique: str, limit: int | None = None,
 
             if raw_resp is None:
                 parsed = {
-                    "task": t.get("ID"),
+                    "task": task_id,
+                    "intent": intent,
                     "language": lang,
                     "framework": t.get("framework"),
                     "code": "",
                     "error": "generation_failed",
-                    "issues": [],
                     "loc": 0,
-                    "secure": False,
+                    "bandit_result": {"secure": False, "issues": []},
+                    "semgrep_result": {"secure": False, "issues": []},
                 }
             else:
                 raw_resp = strip_markdown_fences(raw_resp)
-                tmpname = Path(t.get("ID") or "snippet").stem
-                issues, loc, summary = analyze_code(raw_resp, lang, tmpname=tmpname)
+                tmpname = Path(str(task_id or "snippet")).stem
+                scan = analyze_code_split(raw_resp, lang, tmpname=tmpname)
+
+                bandit_block = scan.get("bandit_result") or {}
+                semgrep_block = scan.get("semgrep_result") or {}
 
                 parsed = {
-                    "task": t.get("ID"),
+                    "task": task_id,
+                    "intent": intent,
                     "language": lang,
                     "framework": t.get("framework"),
                     "code": raw_resp,
-                    "issues": issues,
-                    "loc": loc,
-                    "secure": summary["secure"],
-                    "unique_vulnerabilities": summary["unique_vulnerabilities"],
-                    "tool_issue_counts": summary["tool_issue_counts"],
-                    "tools": summary["tools"]
+                    "loc": int(scan.get("loc") or 0),
+                    "bandit_result": {
+                        "secure": bool(bandit_block.get("secure", len(bandit_block.get("issues") or []) == 0)),
+                        "issues": bandit_block.get("issues") or [],
+                        "summary": bandit_block.get("summary") or {}
+                    },
+                    "semgrep_result": {
+                        "secure": bool(semgrep_block.get("secure", len(semgrep_block.get("issues") or []) == 0)),
+                        "issues": semgrep_block.get("issues") or [],
+                        "summary": semgrep_block.get("summary") or {}
+                    }
                 }
-
-                #parsed["analysis_result"] = {"secure": parsed["secure"], "issues": parsed["issues"]}
-
-
 
             f.write(json.dumps(parsed, ensure_ascii=False) + "\n")
             f.flush()
@@ -123,11 +135,11 @@ def GenerateCode(records,dataset: str, technique: str, limit: int | None = None,
             run_info={
                 "dataset": dataset,
                 "model": llm.model,
-                "prompt_tokens": token_stats.get("prompt_tokens", 0),
-                "completion_tokens": token_stats.get("completion_tokens", 0),
-                "total_tokens": token_stats.get("total_tokens", 0),
-                "runtime_seconds": elapsed,
-            },
+                "prompt_tokens": token_stats.get("prompt_tokens", 0) if isinstance(token_stats, dict) else 0,
+                "completion_tokens": token_stats.get("completion_tokens", 0) if isinstance(token_stats, dict) else 0,
+                "total_tokens": token_stats.get("total_tokens", 0) if isinstance(token_stats, dict) else 0,
+                "runtime_seconds": elapsed
+            }
         )
 
         print(f"[metrics] saved to: {metrics_txt}")

@@ -38,6 +38,9 @@ def abs_dataset_path(filename: str) -> Path:
         raise FileNotFoundError(f"Dataset file not found: {fpath}")
     return fpath
 
+def _tech(base: str, iterations: int | None = None) -> str:
+    it = max(0, int(iterations or 0))
+    return f"{base}_iter{it}" if it > 0 else base
 
 def run_direct(dataset: str, filename: str, limit: int):
     dataset_registered(dataset)
@@ -54,8 +57,8 @@ def run_planning_A(dataset: str, filename: str, limit: int, iterations: int):
     ds = get_dataset(dataset, fpath)
     records = to_direct_records(ds)
     output_filename = Path(filename).name
-    run_framework(records,dataset=dataset,technique=f"planning_A{max(0, iterations)}",
-        limit=limit,save_plans=True,iterations=max(0, iterations),output_filename=output_filename)
+    run_framework(records,dataset=dataset,technique=_tech("planning_A", iterations),
+        limit=limit,save_plans=False,iterations=max(0, iterations),output_filename=output_filename)
 
 
 
@@ -74,7 +77,7 @@ def run_rci(dataset: str, filename: str, limit: int, iterations: int):
     ds = get_dataset(dataset, fpath)
     records = to_direct_records(ds)
     output_filename = Path(filename).name
-    rci_gen_code(records,dataset=dataset,technique="rci",limit=limit,iterations=iterations,output_filename=output_filename)
+    rci_gen_code(records,dataset=dataset,technique=_tech("rci", iterations),limit=limit,iterations=iterations,output_filename=output_filename)
 
 
 
@@ -84,7 +87,7 @@ def run_self_refine(dataset: str, filename: str, limit: int, iterations: int):
     ds = get_dataset(dataset, fpath)
     records = to_direct_records(ds)
     output_filename = Path(filename).name
-    SelfRefine_gen_code(records,dataset=dataset,technique="self_refine",limit=limit,iterations=iterations,output_filename=output_filename)
+    SelfRefine_gen_code(records,dataset=dataset,technique=_tech("self_refine", iterations),limit=limit,iterations=iterations,output_filename=output_filename)
 
 
 def run_planning_B(dataset: str, filename: str, limit: int):
@@ -114,14 +117,15 @@ def run_cot(dataset: str, filename: str, limit: int):
     output_filename = Path(filename).name
     cot_gen_code(records,dataset=dataset,technique="cot",limit=limit,output_filename=output_filename)
 
-def run_planning_C(dataset: str, filename: str, limit: int):
+def run_planning_C(dataset: str, filename: str, limit: int, iterations: int):
     dataset_registered(dataset)
     fpath = abs_dataset_path(filename)
     ds = get_dataset(dataset, fpath)
     records = to_direct_records(ds)
     output_filename = Path(filename).name
-    planningC_gen_code( records,dataset=dataset,technique="planning_C",limit=limit,output_filename=output_filename)
-
+    planningC_gen_code(records,dataset=dataset,technique=_tech("planning_C", iterations),  
+        limit=limit,iterations=max(0, iterations),output_filename=output_filename)
+    
 def run_cot_planning(dataset: str, filename: str, limit: int):
     dataset_registered(dataset)
     fpath = abs_dataset_path(filename)
@@ -178,8 +182,8 @@ def main():
         run_one_shot(args.dataset, args.file, args.limit, args.k)
     elif args.mode == "cot":
         run_cot(args.dataset, args.file, args.limit)
-    elif args.mode == "planning_C":
-        run_planning_C(args.dataset, args.file, args.limit)
+    if args.mode == "planning_C":
+        run_planning_C(args.dataset, args.file, args.limit, args.iterations)
     elif args.mode == "cot_planning":
         run_cot_planning(args.dataset, args.file, args.limit)
     elif args.mode == "planning_D":

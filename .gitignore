@@ -218,3 +218,7 @@ __marimo__/
 # Project secrets & local config
 api_key.txt
 
+# Generated LLM outputs (artifacts)
+outputs/**
+# Keep run metadata only
+!outputs/**/run_meta.json

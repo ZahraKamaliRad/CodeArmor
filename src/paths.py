@@ -45,16 +45,24 @@ class Paths:
         if not base_tech.exists():
             out_dir = base_tech
             out_dir.mkdir(parents=True, exist_ok=True)
+
         else:
-            pattern = re.compile(rf"^{re.escape(tech)}(\d+)$")
-            max_n = 1
+            
+            pat_paren = re.compile(rf"^{re.escape(tech)}\((\d+)\)$")
+            pat_legacy = re.compile(rf"^{re.escape(tech)}(\d+)$")  
+            max_n = 1 
             for p in base.iterdir():
-                if p.is_dir():
-                    m = pattern.match(p.name)
-                    if m:
-                        max_n = max(max_n, int(m.group(1)))
-            out_dir = base / f"{tech}{max_n + 1}"
+                if not p.is_dir():
+                    continue
+                if p.name == tech:
+                    max_n = max(max_n, 1)
+                    continue
+                m = pat_paren.match(p.name) or pat_legacy.match(p.name)
+                if m:
+                    max_n = max(max_n, int(m.group(1)))
+            out_dir = base / f"{tech}({max_n + 1})"
             out_dir.mkdir(parents=True, exist_ok=False)
+
 
         commit = get_commit(self.root)
         meta = {

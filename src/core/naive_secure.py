@@ -3,7 +3,7 @@ import json, re, time
 from pathlib import Path
 
 from .openai_client import LLMClient, sanitize_model_name
-from .analyzer import analyze_code
+from .analyzer import analyze_code_split
 from src.paths import PATHS
 from ..utils.metrics import save_metrics_result
 from ..utils.tokens import get_token_stats
@@ -72,27 +72,31 @@ def gen_code(records,dataset: str,technique: str,limit: int | None = None,output
             if raw_resp is None:
                 parsed = {
                     "task": t.get("ID"),
+                    "intent": t.get("Prompt", "") or "",
                     "language": lang,
                     "framework": t.get("framework"),
                     "technique": technique,
                     "code": "",
                     "error": "generation_failed",
-                    "issues": [],
                     "loc": 0,
-                    "secure": False,
+                    "bandit_result": {"secure": False, "issues": []},
+                    "semgrep_result": {"secure": False, "issues": []}
                 }
+
             else:
-                raw_resp = strip_markdown_fences(raw_resp)
-                issues, loc = analyze_code(raw_resp, lang, tmpname=t.get("ID"))
+                tmpname = Path(str(t.get("ID") or "snippet")).stem
+                scan = analyze_code_split(raw_resp, lang, tmpname=tmpname)
+
                 parsed = {
                     "task": t.get("ID"),
+                    "intent": t.get("Prompt", "") or "",
                     "language": lang,
                     "framework": t.get("framework"),
                     "technique": technique,
                     "code": raw_resp,
-                    "issues": issues,
-                    "loc": loc,
-                    "secure": len(issues) == 0,
+                    "loc": int(scan.get("loc") or 0),
+                    "bandit_result": scan.get("bandit_result") or {"secure": True, "issues": []},
+                    "semgrep_result": scan.get("semgrep_result") or {"secure": True, "issues": []}
                 }
 
             f.write(json.dumps(parsed, ensure_ascii=False) + "\n")
@@ -115,8 +119,8 @@ def gen_code(records,dataset: str,technique: str,limit: int | None = None,output
                 "prompt_tokens": token_stats.get("prompt_tokens", 0),
                 "completion_tokens": token_stats.get("completion_tokens", 0),
                 "total_tokens": token_stats.get("total_tokens", 0),
-                "runtime_seconds": elapsed,
-            },
+                "runtime_seconds": elapsed
+            }
         )
 
         print(f"[metrics] saved to: {metrics_txt}")

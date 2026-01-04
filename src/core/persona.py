@@ -5,7 +5,7 @@ import json, re, time
 from .openai_client import LLMClient, sanitize_model_name
 from src.paths import PATHS
 from ..utils.metrics import save_metrics_result
-from .analyzer import analyze_code
+from .analyzer import analyze_code_split
 from ..utils.tokens import get_token_stats
 
 
@@ -26,7 +26,8 @@ def strip_markdown_fences(s: str) -> str:
     return s.strip()
 
 
-def persona_gen_code(records,dataset: str,technique: str,limit: int | None = None,output_filename: str | None = None):
+def persona_gen_code(records,dataset: str,technique: str,limit: int | None = None,
+    output_filename: str | None = None):
     start_time = time.time()
     llm = LLMClient()
     model_tag = sanitize_model_name(llm.model)
@@ -63,40 +64,45 @@ def persona_gen_code(records,dataset: str,technique: str,limit: int | None = Non
                     msg = str(e)
                     if "502" in msg or "Bad Gateway" in msg or "InternalServerError" in msg:
                         wait = 2 ** attempt
-                        print(f"[Warn] Server error 502. Retrying in {wait}s (attempt {attempt+1}/3)...")
+                        print(
+                            f"[Warn] Server error 502. Retrying in {wait}s (attempt {attempt+1}/3)..."
+                        )
                         time.sleep(wait)
                         continue
-                    else:
-                        print(f"[Error] {e}")
-                        break
+                    print(f"[Error] {e}")
+                    break
 
             if raw_resp is None:
                 parsed = {
                     "task": t.get("ID"),
+                    "intent": t.get("Prompt", "") or "",
                     "language": lang,
                     "framework": t.get("framework"),
                     "technique": technique,
                     "code": "",
                     "error": "generation_failed",
-                    "issues": [],
                     "loc": 0,
-                    "secure": False,
+                    "bandit_result": {"secure": False, "issues": []},
+                    "semgrep_result": {"secure": False, "issues": []}
                 }
             else:
                 raw_resp = strip_markdown_fences(raw_resp)
-                issues, loc = analyze_code(raw_resp, lang, tmpname=t.get("ID"))
+                scan = analyze_code_split(
+                    raw_resp,
+                    lang,
+                    tmpname=str(t.get("ID") or "snippet"),
+                )
                 parsed = {
                     "task": t.get("ID"),
+                    "intent": t.get("Prompt", "") or "",
                     "language": lang,
                     "framework": t.get("framework"),
                     "technique": technique,
                     "code": raw_resp,
-                    "issues": issues,
-                    "loc": loc,
-                    "secure": len(issues) == 0,
+                    "loc": int(scan.get("loc") or 0),
+                    "bandit_result": scan.get("bandit_result") or {"secure": True, "issues": []},
+                    "semgrep_result": scan.get("semgrep_result") or {"secure": True, "issues": []}
                 }
-
-            parsed["bandit_result"] = {"secure": parsed["secure"], "issues": parsed["issues"]}
 
             f.write(json.dumps(parsed, ensure_ascii=False) + "\n")
             f.flush()
@@ -118,8 +124,8 @@ def persona_gen_code(records,dataset: str,technique: str,limit: int | None = Non
                 "prompt_tokens": token_stats.get("prompt_tokens", 0),
                 "completion_tokens": token_stats.get("completion_tokens", 0),
                 "total_tokens": token_stats.get("total_tokens", 0),
-                "runtime_seconds": elapsed,
-            },
+                "runtime_seconds": elapsed
+            }
         )
 
         print(f"[metrics] saved to: {metrics_txt}")
