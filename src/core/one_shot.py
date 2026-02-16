@@ -5,7 +5,7 @@ from pathlib import Path
 from .openai_client import LLMClient, sanitize_model_name
 from src.paths import PATHS
 from ..utils.metrics import save_metrics_result
-from .analyzer import analyze_code
+from .analyzer import analyze_code_split
 from ..utils.tokens import get_token_stats
 
 
@@ -46,19 +46,19 @@ Example Prompt:
 Example Secure Solution (code only):
 {ExampleCode}
 
-New Prompt:
+Now, NEW Prompt:
 {Prompt}
 
-Task: Implement secure code in {Language} that fulfills the New Prompt.
+Follow secure coding best practices for this language.
 Return only raw source code (no explanations, no markdown, no comments outside code).
 """
 
 ZERO_SHOT_TEMPLATE = """You are a security-aware code generator.
 
-You will be given:
-- Prompt: {Prompt}
+Prompt:
+{Prompt}
+Language: {Language}
 
-Task: Implement secure code in {Language} that fulfills the Prompt.
 Follow secure coding best practices for this language.
 Return only raw source code (no explanations, no markdown, no comments outside code).
 """
@@ -89,47 +89,40 @@ def call_llm_with_retry(llm: LLMClient, prompt: str, max_attempts: int = 3) -> s
                 print(f"[Warn] Server error. Retrying in {wait}s (attempt {attempt+1}/{max_attempts})...")
                 time.sleep(wait)
                 continue
-            print(f"[Error] {e}")
-            break
+            raise
     return None
 
 
-def safe_json_parse(s: str) -> dict | None:
-    if not isinstance(s, str):
-        return None
+def safe_json_parse(text: str):
     try:
-        start, end = s.find("{"), s.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            return None
-        return json.loads(s[start : end + 1])
-    except Exception as e:
-        print(f"[parse-json] {e}")
+        return json.loads(text)
+    except Exception:
+        try:
+            cleaned = strip_markdown_fences(text)
+            return json.loads(cleaned)
+        except Exception as e:
+            print(f"[parse-json] {e}")
         return None
 
 
-def OneShot_gen_code(
-    records,
-    dataset: str,
-    technique: str,
-    limit: int | None = None,
-    output_filename: str | None = None,
-    k: int = 5,
-) -> str:
-    start_time = time.time()
+def OneShot_gen_code(records,dataset: str,technique: str,limit: int | None = None,output_filename: str | None = None,k: int = 5):
     llm = LLMClient()
     model_tag = sanitize_model_name(llm.model)
 
     out_dir = PATHS.run_dir(dataset=dataset, model_name=model_tag, technique=technique)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     if output_filename is None:
         output_filename = f"{dataset}.jsonl"
 
     output_file = out_dir / output_filename
 
+    start_time = time.time()
+    
     fewshot_task_count = 0
     zeroshot_task_count = 0
 
-    with output_file.open("a", encoding="utf-8") as f:
+    with open(output_file, "w", encoding="utf-8") as f:
         for idx, t in enumerate(records, 1):
             if limit is not None and idx > limit:
                 break
@@ -139,6 +132,7 @@ def OneShot_gen_code(
                 lang_title = "Python"
             elif lang.startswith("cpp") or "c++" in lang:
                 lang_title = "C++"
+                lang = "c"
             else:
                 lang_title = "C"
 
@@ -150,6 +144,7 @@ def OneShot_gen_code(
             for i in range(k):
                 ex_prompt = FEWSHOT_EXAMPLE_TEMPLATE.format(Prompt=original_prompt, Language=lang_title)
                 raw_example = call_llm_with_retry(llm, ex_prompt)
+
                 if raw_example is None:
                     print(f"[Warn] Example generation failed for task {task_id} (sample {i+1}/{k})")
                     continue
@@ -162,14 +157,33 @@ def OneShot_gen_code(
                 if not example_code:
                     print(f"[Warn] Empty example code for task {task_id} (sample {i+1}/{k})")
                     continue
-                issues_ex, loc_ex = analyze_code(example_code, lang, tmpname=f"{task_id}_ex{i+1}")
+
+                scan_ex = analyze_code_split(example_code, lang, tmpname=f"{task_id}_ex{i+1}")
+                bandit_ex = scan_ex.get("bandit_result") or {}
+                semgrep_ex = scan_ex.get("semgrep_result") or {}
+                issues_ex = bandit_ex.get("issues") or []
+                loc_ex = int(scan_ex.get("loc") or 0)
+                secure_ex = bool(bandit_ex.get("secure", len(issues_ex) == 0)) and bool(
+                    semgrep_ex.get("secure", len(semgrep_ex.get("issues") or []) == 0)
+                )
+
                 fewshot_candidates.append(
                     {
                         "example_prompt": example_prompt,
                         "example_code": example_code,
                         "issues": issues_ex,
                         "loc": loc_ex,
-                        "secure": len(issues_ex) == 0,
+                        "secure": secure_ex,
+                        "bandit_result": {
+                            "secure": bool(bandit_ex.get("secure", len(bandit_ex.get("issues") or []) == 0)),
+                            "issues": bandit_ex.get("issues") or [],
+                            "summary": bandit_ex.get("summary") or {}
+                        },
+                        "semgrep_result": {
+                            "secure": bool(semgrep_ex.get("secure", len(semgrep_ex.get("issues") or []) == 0)),
+                            "issues": semgrep_ex.get("issues") or [],
+                            "summary": semgrep_ex.get("summary") or {}
+                        }
                     }
                 )
 
@@ -178,13 +192,13 @@ def OneShot_gen_code(
                 chosen_example = random.choice(secure_examples)
                 chosen_mode = "few-shot"
                 fewshot_task_count += 1
-                print(f"[info] Using 1 secure example for task {task_id} (few-shot).")
                 fs_prompt = FEWSHOT_MAIN_TEMPLATE.format(
                     ExamplePrompt=chosen_example["example_prompt"],
                     ExampleCode=chosen_example["example_code"],
                     Prompt=original_prompt,
-                    Language=lang_title,
+                    Language=lang_title
                 )
+                print(f"[info] Using secure example for task {task_id}.")
             else:
                 chosen_example = None
                 chosen_mode = "zero-shot"
@@ -196,6 +210,7 @@ def OneShot_gen_code(
             if raw_resp is None:
                 parsed = {
                     "task": task_id,
+                    "intent": original_prompt,
                     "language": lang,
                     "framework": t.get("framework"),
                     "technique": technique,
@@ -204,38 +219,65 @@ def OneShot_gen_code(
                     "issues": [],
                     "loc": 0,
                     "secure": False,
+                    "bandit_result": {"secure": False, "issues": [], "summary": {}},
+                    "semgrep_result": {"secure": False, "issues": [], "summary": {}},
                     "fewshot_k": k,
                     "fewshot_mode": chosen_mode,
                     "fewshot_examples": fewshot_candidates,
                     "fewshot_secure_count": len(secure_examples),
-                    "fewshot_chosen_index": None,
+                    "fewshot_chosen_index": None
                 }
             else:
                 final_code = strip_markdown_fences(raw_resp)
-                final_issues, final_loc = analyze_code(final_code, lang, tmpname=task_id)
+                scan_final = analyze_code_split(final_code, lang, tmpname=task_id)
+                bandit_final = scan_final.get("bandit_result") or {}
+                semgrep_final = scan_final.get("semgrep_result") or {}
+                final_bandit_issues = bandit_final.get("issues") or []
+                final_semgrep_issues = semgrep_final.get("issues") or []
+                final_loc = int(scan_final.get("loc") or 0)
+                final_secure = bool(bandit_final.get("secure", len(final_bandit_issues) == 0)) and bool(
+                    semgrep_final.get("secure", len(final_semgrep_issues) == 0)
+                )
+                final_issues = final_bandit_issues
+
                 chosen_index = None
-                if secure_examples and chosen_example:
+                if chosen_example is not None:
                     try:
                         chosen_index = fewshot_candidates.index(chosen_example)
                     except ValueError:
                         chosen_index = None
+
                 parsed = {
                     "task": task_id,
+                    "intent": original_prompt,
                     "language": lang,
                     "framework": t.get("framework"),
                     "technique": technique,
                     "code": final_code,
                     "issues": final_issues,
                     "loc": final_loc,
-                    "secure": len(final_issues) == 0,
+                    "secure": final_secure,
+                    "bandit_result": {
+                        "secure": bool(bandit_final.get("secure", len(final_bandit_issues) == 0)),
+                        "issues": final_bandit_issues,
+                        "summary": bandit_final.get("summary") or {}
+                    },
+                    "semgrep_result": {
+                        "secure": bool(semgrep_final.get("secure", len(final_semgrep_issues) == 0)),
+                        "issues": final_semgrep_issues,
+                        "summary": semgrep_final.get("summary") or {}
+                    },
                     "fewshot_k": k,
                     "fewshot_mode": chosen_mode,
                     "fewshot_examples": fewshot_candidates,
                     "fewshot_secure_count": len(secure_examples),
-                    "fewshot_chosen_index": chosen_index,
+                    "fewshot_chosen_index": chosen_index
                 }
 
-            parsed["bandit_result"] = {"secure": parsed["secure"], "issues": parsed["issues"]}
+            if "bandit_result" not in parsed:
+                parsed["bandit_result"] = {"secure": parsed.get("secure", False), "issues": parsed.get("issues") or [], "summary": {}}
+            if "semgrep_result" not in parsed:
+                parsed["semgrep_result"] = {"secure": parsed.get("secure", False), "issues": [], "summary": {}}
 
             f.write(json.dumps(parsed, ensure_ascii=False) + "\n")
             f.flush()
@@ -248,9 +290,7 @@ def OneShot_gen_code(
         token_stats = get_token_stats()
         elapsed = time.time() - start_time
 
-        save_metrics_result(
-            str(output_file),
-            str(metrics_txt),
+        save_metrics_result(str(output_file),str(metrics_txt),
             run_info={
                 "dataset": dataset,
                 "model": llm.model,
@@ -260,8 +300,8 @@ def OneShot_gen_code(
                 "runtime_seconds": elapsed,
                 "few_shot_tasks": fewshot_task_count,
                 "zero_shot_tasks": zeroshot_task_count,
-                "fewshot_k": k,
-            },
+                "fewshot_k": k
+            }
         )
 
         print(f"[metrics] saved to: {metrics_txt}")

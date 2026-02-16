@@ -7,6 +7,10 @@ TASK_COL = "task_id"
 ITER_COL = "iter"
 RULE_COL = "rule_id"
 
+ANALYZER_COL = "analyzer"
+TASK_BASE_COL = "task_base"
+
+
 def load_refinement_df(csv_path: Path) -> pd.DataFrame:
     df = pd.read_csv(csv_path, encoding="utf-8-sig")
 
@@ -19,13 +23,23 @@ def load_refinement_df(csv_path: Path) -> pd.DataFrame:
     df[ITER_COL] = pd.to_numeric(df[ITER_COL], errors="coerce")
     df = df.dropna(subset=[ITER_COL])
 
+    df[TASK_COL] = df[TASK_COL].astype(str)
+
+    df[ANALYZER_COL] = df[TASK_COL].apply(
+        lambda x: "bandit" if x.endswith("#bandit")
+        else "semgrep" if x.endswith("#semgrep")
+        else "unknown"
+    )
+
+    df[TASK_BASE_COL] = df[TASK_COL].str.replace(r"#(bandit|semgrep)$", "", regex=True)
+
     def agg_group(g: pd.DataFrame) -> pd.Series:
         mask = g[RULE_COL].notna() & (g[RULE_COL] != "")
         issue_count = int(mask.sum())
         return pd.Series({"issue_count": issue_count})
 
     grouped = (
-        df.groupby([TASK_COL, ITER_COL], as_index=False)
+        df.groupby([TASK_BASE_COL, ANALYZER_COL, ITER_COL], as_index=False)
         .apply(agg_group)
         .reset_index(drop=True)
     )
@@ -35,7 +49,7 @@ def load_refinement_df(csv_path: Path) -> pd.DataFrame:
 
 def counts_per_task_iter_df(df: pd.DataFrame) -> pd.DataFrame:
     piv = df.pivot_table(
-        index=TASK_COL,
+        index=TASK_BASE_COL,
         columns=ITER_COL,
         values="issue_count",
         aggfunc="sum",
@@ -68,56 +82,64 @@ def totals_carry_forward(pivot: pd.DataFrame) -> pd.Series:
     return totals.sort_index().astype(int)
 
 
-def compute_totals(csv_path: Path, df: pd.DataFrame | None = None, cumulative: bool = True) -> pd.Series:
+def compute_totals_by_analyzer(csv_path: Path,analyzer: str,
+    df: pd.DataFrame | None = None,cumulative: bool = True) -> pd.Series:
 
     if df is None:
         df = load_refinement_df(csv_path)
     if df.empty:
         return pd.Series(dtype=int)
 
-    pivot = counts_per_task_iter_df(df)
+    sub = df[df[ANALYZER_COL] == analyzer]
+    if sub.empty:
+        return pd.Series(dtype=int)
+
+    pivot = counts_per_task_iter_df(sub)
     if pivot.empty:
         return pd.Series(dtype=int)
 
     return totals_carry_forward(pivot) if cumulative else totals_point_in_time(pivot)
 
 
-def plot_totals(
-    csv_path: Path,
-    out: Path | None = None,
-    kind: str = "line",
-    show: bool = True,
-    df: pd.DataFrame | None = None,
-    verbose: bool = False,
-    cumulative: bool = True,
-) -> Path | None:
-    totals = compute_totals(csv_path, df=df, cumulative=cumulative)
-    if totals.empty:
+def plot_totals(csv_path: Path,out: Path | None = None,kind: str = "line",show: bool = True,df: pd.DataFrame | None = None,
+    verbose: bool = False,cumulative: bool = True) -> Path | None:
+
+    if df is None:
+        df = load_refinement_df(csv_path)
+
+    bandit_totals = compute_totals_by_analyzer(csv_path, "bandit", df=df, cumulative=cumulative)
+    semgrep_totals = compute_totals_by_analyzer(csv_path, "semgrep", df=df, cumulative=cumulative)
+
+    if bandit_totals.empty and semgrep_totals.empty:
         print("[warn] No data to plot.")
         return None
 
     plt.figure(figsize=(8, 4.5))
-    x = list(totals.index)
-    y = list(totals.values)
 
     if kind == "bar":
-        plt.bar(x, y)
-    else:
-        plt.plot(x, y, marker="o")
+        kind = "line"
 
-    xmin, xmax = int(min(x)), int(max(x))
-    plt.xlim(xmin, xmax)
-    plt.xticks(range(xmin, xmax + 1, 1))
+    if not bandit_totals.empty:
+        plt.plot(list(bandit_totals.index),list(bandit_totals.values),marker="o",label="Bandit")
 
-    ymax = max(y) if y else 0
+    if not semgrep_totals.empty:
+        plt.plot(list(semgrep_totals.index),list(semgrep_totals.values),marker="s",label="Semgrep")
+
+    all_x = sorted(set(bandit_totals.index).union(set(semgrep_totals.index)))
+    if all_x:
+        xmin, xmax = int(min(all_x)), int(max(all_x))
+        plt.xlim(xmin, xmax)
+        plt.xticks(range(xmin, xmax + 1, 1))
+
+    y_all = list(bandit_totals.values) + list(semgrep_totals.values)
+    ymax = max(y_all) if y_all else 0
     step = 5
     ymax_rounded = ((int(ymax) + step - 1) // step) * step
     plt.yticks(range(0, ymax_rounded + step, step))
-
-    plt.title("Total Vulnerabilities vs Iterations")
     plt.xlabel("Iterations")
     plt.ylabel("Total vulnerabilities")
     plt.grid(True, linestyle="--", alpha=0.4)
+    plt.legend()
     plt.tight_layout()
 
     if out:
@@ -133,92 +155,114 @@ def plot_totals(
         return None
 
 
-def label_change(start: int, end: int) -> str:
-    if start > 0 and end == 0:
-        return "zero"
-    if start > 0 and end > 0 and end < start:
-        return "decreased"
-    if start > 0 and end > 0 and end > start:
-        return "increased"
-    if start == 0 and end > 0:
-        return "introduced"
-    if start > 0 and end == start:
-        return "unchanged"
-    return "none"
+# def label_change(start: int, end: int) -> str:
+#     if start > 0 and end == 0:
+#         return "zero"
+#     if start > 0 and end > 0 and end < start:
+#         return "decreased"
+#     if start > 0 and end > 0 and end > start:
+#         return "increased"
+#     if start == 0 and end > 0:
+#         return "introduced"
+#     if start > 0 and end == start:
+#         return "unchanged"
+#     return "none"
 
 
-def refinment_summary(csv_path: Path,metrics_txt: Path | None = None,df: pd.DataFrame | None = None,
-    write: bool = True,) -> dict:
+# def refinment_summary(csv_path: Path,metrics_txt: Path | None = None,df: pd.DataFrame | None = None,
+#     write: bool = True) -> dict:
 
-    def write_empty_summary() -> dict:
-        text = (
-            "\n=== Refinement Summary (0 -> 0) ===\n"
-            "zero --> 0\n"
-            "decreased --> 0\n"
-            "increased --> 0\n"
-            "introduced --> 0\n"
-            "unchanged --> 0\n"
-        )
-        if write and metrics_txt:
-            metrics_txt.parent.mkdir(parents=True, exist_ok=True)
-            with open(metrics_txt, "a", encoding="utf-8") as f:
-                f.write(text)
-        return {
-            "end_iter": 0,
-            "buckets": {k: 0 for k in ["zero", "decreased", "increased", "introduced", "unchanged"]},
-            "text": text,
-        }
+#     def write_empty_summary() -> dict:
+#         text = (
+#             "\n=== Refinement Summary (0 -> 0) ===\n"
+#             "zero --> 0\n"
+#             "decreased --> 0\n"
+#             "increased --> 0\n"
+#             "introduced --> 0\n"
+#             "unchanged --> 0\n"
+#         )
+#         if write and metrics_txt:
+#             metrics_txt.parent.mkdir(parents=True, exist_ok=True)
+#             with open(metrics_txt, "a", encoding="utf-8") as f:
+#                 f.write(text)
+#         return {
+#             "end_iter": 0,
+#             "buckets": {k: 0 for k in ["zero", "decreased", "increased", "introduced", "unchanged"]},
+#             "text": text
+#         }
 
-    if df is None:
-        if not Path(csv_path).exists():
-            return write_empty_summary()
-        df = load_refinement_df(csv_path)
+#     if df is None:
+#         if not Path(csv_path).exists():
+#             return write_empty_summary()
+#         df = load_refinement_df(csv_path)
 
-    if df.empty:
-        return write_empty_summary()
+#     if df.empty:
+#         return write_empty_summary()
+#     def summary_from_sub(sub: pd.DataFrame) -> dict:
+#         pivot_all = counts_per_task_iter_df(sub)
 
-    pivot_all = counts_per_task_iter_df(df)
+#         iters_present = []
+#         for c in pivot_all.columns:
+#             try:
+#                 iters_present.append(int(c))
+#             except Exception:
+#                 pass
 
-    iters_present = []
-    for c in pivot_all.columns:
-        try:
-            iters_present.append(int(c))
-        except Exception:
-            pass
+#         if 0 not in iters_present:
+#             raise ValueError("Expected baseline iter 0 is missing.")
 
-    if 0 not in iters_present:
-        raise ValueError("Expected baseline iter 0 is missing.")
+#         end_iter = max(iters_present)
 
-    end_iter = max(iters_present)
+#         comp = pd.DataFrame(index=pivot_all.index)
+#         comp["start_iter"] = pivot_all.get(0, 0)
+#         comp["end_iter"] = pivot_all.get(end_iter, 0)
+#         comp = comp.fillna(0).astype(int)
 
-    comp = pd.DataFrame(index=pivot_all.index)
-    comp["start_iter"] = pivot_all.get(0, 0)
-    comp["end_iter"] = pivot_all.get(end_iter, 0)
-    comp = comp.fillna(0).astype(int)
+#         cats = comp.apply(lambda r: label_change(int(r["start_iter"]), int(r["end_iter"])), axis=1)
+#         order = ["zero", "decreased", "increased", "introduced", "unchanged"]
+#         vc = cats.value_counts().reindex(order, fill_value=0)
 
-    cats = comp.apply(lambda r: label_change(int(r["start_iter"]), int(r["end_iter"])), axis=1)
-    order = ["zero", "decreased", "increased", "introduced", "unchanged"]
-    vc = cats.value_counts().reindex(order, fill_value=0)
+#         return {
+#             "end_iter": int(end_iter),
+#             "buckets": {k: int(vc.get(k, 0)) for k in order}
+#         }
 
-    text_lines = [
-        "",
-        f"=== Refinement Summary (0 -> {end_iter}) ===",
-        f"zero --> {int(vc.get('zero', 0))}",
-        f"decreased --> {int(vc.get('decreased', 0))}",
-        f"increased --> {int(vc.get('increased', 0))}",
-        f"introduced --> {int(vc.get('introduced', 0))}",
-        f"unchanged --> {int(vc.get('unchanged', 0))}",
-        "",
-    ]
-    text = "\n".join(text_lines)
+#     out_obj: dict = {"analyzers": {}}
 
-    if write and metrics_txt:
-        metrics_txt.parent.mkdir(parents=True, exist_ok=True)
-        with open(metrics_txt, "a", encoding="utf-8") as f:
-            f.write(text)
+#     for an in ["bandit", "semgrep"]:
+#         sub = df[df[ANALYZER_COL] == an]
+#         if sub.empty:
+#             out_obj["analyzers"][an] = {
+#                 "end_iter": 0,
+#                 "buckets": {k: 0 for k in ["zero", "decreased", "increased", "introduced", "unchanged"]}
+#             }
+#         else:
+#             out_obj["analyzers"][an] = summary_from_sub(sub)
 
-    return {
-        "end_iter": int(end_iter),
-        "buckets": {k: int(vc.get(k, 0)) for k in order},
-        "text": text,
-    }
+#     merged = df.copy()
+#     merged[ANALYZER_COL] = "all"
+#     out_obj["analyzers"]["all"] = summary_from_sub(merged) if not merged.empty else {
+#         "end_iter": 0,
+#         "buckets": {k: 0 for k in ["zero", "decreased", "increased", "introduced", "unchanged"]}
+#     }
+
+#     end_iter = out_obj["analyzers"]["all"]["end_iter"]
+#     lines = ["", f"=== Refinement Summary (0 -> {end_iter}) ==="]
+#     for key in ["bandit", "semgrep", "all"]:
+#         b = out_obj["analyzers"][key]["buckets"]
+#         lines.append(f"[{key}] zero --> {b['zero']}")
+#         lines.append(f"[{key}] decreased --> {b['decreased']}")
+#         lines.append(f"[{key}] increased --> {b['increased']}")
+#         lines.append(f"[{key}] introduced --> {b['introduced']}")
+#         lines.append(f"[{key}] unchanged --> {b['unchanged']}")
+#         lines.append("")
+
+#     text = "\n".join(lines)
+
+#     if write and metrics_txt:
+#         metrics_txt.parent.mkdir(parents=True, exist_ok=True)
+#         with open(metrics_txt, "a", encoding="utf-8") as f:
+#             f.write(text)
+
+#     out_obj["text"] = text
+#     return out_obj

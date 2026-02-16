@@ -11,7 +11,7 @@ from ..utils.metrics import save_metrics_result
 from .analyzer import analyze_code_split
 from ..utils.tokens import get_token_stats
 from ..utils.io import csv_log
-from ..utils.plot_refinment import load_refinement_df, plot_totals, refinment_summary
+from ..utils.plot_refinment import load_refinement_df, plot_totals
 
 
 
@@ -391,7 +391,7 @@ def planningC_gen_code(records,dataset: str,technique: str,limit: int | None = N
             out_img = out_dir / "plots" / "Refinment_Plot.png"
             out_img.parent.mkdir(parents=True, exist_ok=True)
             plot_totals(csv_path, out=out_img, kind="line", show=False, df=df, verbose=False)
-            refinment_summary(csv_path, metrics_txt=metrics_txt, df=df, write=True)
+            #refinment_summary(csv_path, metrics_txt=metrics_txt, df=df, write=True)
 
         print(f"[metrics] saved to: {metrics_txt}")
     except Exception as e:

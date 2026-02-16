@@ -1,14 +1,17 @@
 from __future__ import annotations
-import json, re, time
+
+import json
+import re
+import time
 from pathlib import Path
 from string import Template
 
 from .openai_client import LLMClient, sanitize_model_name
-from .analyzer import analyze_code
+from .analyzer import analyze_code_split
 from src.paths import PATHS
 from ..utils.io import csv_log
 from ..utils.metrics import save_metrics_result
-from ..utils.plot_refinment import load_refinement_df, plot_totals, refinment_summary
+from ..utils.plot_refinment import load_refinement_df, plot_totals
 from ..utils.tokens import get_token_stats
 
 
@@ -118,7 +121,6 @@ Feedback:
 $FEEDBACK
 Refined (return only the final source code; no explanations; no markdown fences; no backticks):
 """
-
 CODE_FENCE_RE = re.compile(r"```[a-zA-Z0-9]*\s*\n(.*?)\n```", re.DOTALL)
 
 
@@ -170,7 +172,56 @@ def generate_with_retry(llm: LLMClient, prompt: str, retries: int = 3):
     return raw
 
 
-def SelfRefine_gen_code(records,dataset: str,technique: str,limit: int | None = None,iterations: int = 1,output_filename: str | None = None):
+def run_two_analyzers(code: str, lang: str, tmpname: str = "snippet") -> dict:
+    scan = analyze_code_split(code, lang, tmpname=tmpname) or {}
+    loc = int(scan.get("loc") or 0)
+
+    bandit_block = scan.get("bandit_result") or {}
+    semgrep_block = scan.get("semgrep_result") or {}
+
+    bandit_issues = bandit_block.get("issues") or []
+    semgrep_issues = semgrep_block.get("issues") or []
+
+    bandit_secure = bool(bandit_block.get("secure", len(bandit_issues) == 0))
+    semgrep_secure = bool(semgrep_block.get("secure", len(semgrep_issues) == 0))
+
+    return {
+        "loc": loc,
+        "bandit_result": {
+            "secure": bandit_secure,
+            "issues": bandit_issues,
+            "summary": bandit_block.get("summary") or {},
+        },
+        "semgrep_result": {
+            "secure": semgrep_secure,
+            "issues": semgrep_issues,
+            "summary": semgrep_block.get("summary") or {},
+        },
+        "secure": bool(bandit_secure and semgrep_secure),
+    }
+
+
+def _log_two_lines(run_out_dir: str, task_id: str, iter_idx: int, lang: str, scan: dict):
+    b_issues = (scan.get("bandit_result") or {}).get("issues") or []
+    s_issues = (scan.get("semgrep_result") or {}).get("issues") or []
+    csv_log(run_out_dir=run_out_dir, task_id=f"{task_id}#bandit", iter_idx=iter_idx, language=lang, issues=b_issues)
+    csv_log(run_out_dir=run_out_dir, task_id=f"{task_id}#semgrep", iter_idx=iter_idx, language=lang, issues=s_issues)
+
+
+def SelfRefine_gen_code(
+    records,
+    dataset: str,
+    technique: str,
+    limit: int | None = None,
+    iterations: int = 1,
+    output_filename: str | None = None,
+):
+    iterations = int(iterations or 0)
+    if iterations <= 0:
+        iterations = 1
+    if "_iter" not in technique:
+        technique = f"{technique}_iter{iterations}"
+
     start_time = time.time()
     llm = LLMClient()
     model_tag = sanitize_model_name(llm.model)
@@ -201,7 +252,9 @@ def SelfRefine_gen_code(records,dataset: str,technique: str,limit: int | None = 
                 lang_key = "c"
 
             task_id = t.get("ID")
-            dataset_prompt = t.get("Prompt", "")
+            intent = t.get("Prompt", "") or ""
+            dataset_prompt = intent
+            tmpname = Path(str(task_id or "snippet")).stem
 
             print(f"=== Running task {idx}: {task_id} [{lang_title}] ===")
 
@@ -210,6 +263,7 @@ def SelfRefine_gen_code(records,dataset: str,technique: str,limit: int | None = 
             if raw_initial is None:
                 parsed = {
                     "task": task_id,
+                    "intent": intent,
                     "language": lang_key,
                     "framework": t.get("framework"),
                     "technique": technique,
@@ -217,12 +271,13 @@ def SelfRefine_gen_code(records,dataset: str,technique: str,limit: int | None = 
                     "iterations": [],
                     "initial_code": "",
                     "final_code": "",
+                    "review": None,
                     "error": "generation_failed",
-                    "issues": [],
                     "loc": 0,
                     "secure": False,
+                    "bandit_result": {"secure": False, "issues": [], "summary": {}},
+                    "semgrep_result": {"secure": False, "issues": [], "summary": {}},
                 }
-                parsed["bandit_result"] = {"secure": parsed["secure"], "issues": parsed["issues"]}
                 f.write(json.dumps(parsed, ensure_ascii=False) + "\n")
                 f.flush()
                 continue
@@ -230,11 +285,21 @@ def SelfRefine_gen_code(records,dataset: str,technique: str,limit: int | None = 
             initial_code = extract_code(raw_initial)
             current_code = initial_code
             history = []
+            last_review = None
 
-            issues0, loc0 = analyze_code(initial_code, lang_key, tmpname=task_id)
-            csv_log(run_out_dir, task_id, 0, lang_key, issues0)
+            scan0 = run_two_analyzers(initial_code, lang_key, tmpname=tmpname)
+            _log_two_lines(run_out_dir, str(task_id), 0, lang_key, scan0)
+
             history.append(
-                {"round": 0, "review": None, "code": initial_code, "issues": issues0, "loc": loc0}
+                {
+                    "round": 0,
+                    "review": None,
+                    "code": initial_code,
+                    "loc": int(scan0.get("loc") or 0),
+                    "secure": bool(scan0.get("secure")),
+                    "bandit_result": scan0.get("bandit_result") or {"secure": False, "issues": [], "summary": {}},
+                    "semgrep_result": scan0.get("semgrep_result") or {"secure": False, "issues": [], "summary": {}},
+                }
             )
 
             for i in range(1, max(1, int(iterations)) + 1):
@@ -244,34 +309,65 @@ def SelfRefine_gen_code(records,dataset: str,technique: str,limit: int | None = 
                 fb_prompt = render(FEEDBACK_TEMPLATE, Prompt=dataset_prompt, CODE=current_code)
                 feedback = generate_with_retry(llm, fb_prompt)
                 if feedback is None:
-                    issues_i, loc_i = analyze_code(current_code, lang_key, tmpname=task_id)
-                    csv_log(run_out_dir, task_id, i, lang_key, issues_i)
+                    scan_i = run_two_analyzers(current_code, lang_key, tmpname=tmpname)
+                    _log_two_lines(run_out_dir, str(task_id), i, lang_key, scan_i)
+
                     history.append(
-                        {"round": i, "review": None, "code": current_code, "issues": issues_i, "loc": loc_i}
+                        {
+                            "round": i,
+                            "review": None,
+                            "code": current_code,
+                            "loc": int(scan_i.get("loc") or 0),
+                            "secure": bool(scan_i.get("secure")),
+                            "bandit_result": scan_i.get("bandit_result") or {"secure": False, "issues": [], "summary": {}},
+                            "semgrep_result": scan_i.get("semgrep_result") or {"secure": False, "issues": [], "summary": {}},
+                        }
                     )
                     break
+
+                last_review = feedback
 
                 refine_prompt = render(REFINE_TEMPLATE, Prompt=dataset_prompt, CODE=current_code, FEEDBACK=feedback)
                 improved_raw = generate_with_retry(llm, refine_prompt)
                 if improved_raw is None:
-                    issues_i, loc_i = analyze_code(current_code, lang_key, tmpname=task_id)
-                    csv_log(run_out_dir, task_id, i, lang_key, issues_i)
+                    scan_i = run_two_analyzers(current_code, lang_key, tmpname=tmpname)
+                    _log_two_lines(run_out_dir, str(task_id), i, lang_key, scan_i)
+
                     history.append(
-                        {"round": i, "review": feedback, "code": current_code, "issues": issues_i, "loc": loc_i}
+                        {
+                            "round": i,
+                            "review": feedback,
+                            "code": current_code,
+                            "loc": int(scan_i.get("loc") or 0),
+                            "secure": bool(scan_i.get("secure")),
+                            "bandit_result": scan_i.get("bandit_result") or {"secure": False, "issues": [], "summary": {}},
+                            "semgrep_result": scan_i.get("semgrep_result") or {"secure": False, "issues": [], "summary": {}},
+                        }
                     )
                     break
 
                 improved_code = extract_code(improved_raw)
-                issues_i, loc_i = analyze_code(improved_code, lang_key, tmpname=task_id)
-                csv_log(run_out_dir, task_id, i, lang_key, issues_i)
+                scan_i = run_two_analyzers(improved_code, lang_key, tmpname=tmpname)
+                _log_two_lines(run_out_dir, str(task_id), i, lang_key, scan_i)
+
                 history.append(
-                    {"round": i, "review": feedback, "code": improved_code, "issues": issues_i, "loc": loc_i}
+                    {
+                        "round": i,
+                        "review": feedback,
+                        "code": improved_code,
+                        "loc": int(scan_i.get("loc") or 0),
+                        "secure": bool(scan_i.get("secure")),
+                        "bandit_result": scan_i.get("bandit_result") or {"secure": False, "issues": [], "summary": {}},
+                        "semgrep_result": scan_i.get("semgrep_result") or {"secure": False, "issues": [], "summary": {}},
+                    }
                 )
                 current_code = improved_code
 
-            issues, loc = analyze_code(current_code, lang_key, tmpname=task_id)
+            final_scan = run_two_analyzers(current_code, lang_key, tmpname=tmpname)
+
             parsed = {
                 "task": task_id,
+                "intent": intent,
                 "language": lang_key,
                 "framework": t.get("framework"),
                 "technique": technique,
@@ -279,12 +375,13 @@ def SelfRefine_gen_code(records,dataset: str,technique: str,limit: int | None = 
                 "iterations": history,
                 "initial_code": initial_code,
                 "final_code": current_code,
-                "issues": issues,
-                "loc": loc,
-                "secure": len(issues) == 0,
+                "review": last_review,
+                "loc": int(final_scan.get("loc") or 0),
+                "secure": bool(final_scan.get("secure")),
+                "bandit_result": final_scan.get("bandit_result") or {"secure": False, "issues": [], "summary": {}},
+                "semgrep_result": final_scan.get("semgrep_result") or {"secure": False, "issues": [], "summary": {}},
             }
 
-            parsed["bandit_result"] = {"secure": parsed["secure"], "issues": parsed["issues"]}
             f.write(json.dumps(parsed, ensure_ascii=False) + "\n")
             f.flush()
 
@@ -317,7 +414,7 @@ def SelfRefine_gen_code(records,dataset: str,technique: str,limit: int | None = 
             out_img = out_dir / "plots" / "Refinment_Plot.png"
             out_img.parent.mkdir(parents=True, exist_ok=True)
             plot_totals(csv_path, out=out_img, kind="line", show=False, df=df, verbose=False)
-            refinment_summary(csv_path, metrics_txt=metrics_txt, df=df, write=True)
+            #refinment_summary(csv_path, metrics_txt=metrics_txt, df=df, write=True)
 
         print(f"[metrics] saved to: {metrics_txt}")
     except Exception as e:
