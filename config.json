@@ -1,11 +1,20 @@
 {
   "llm": {
-    "api_key_path": "api_key.txt",
-    "api_url": "https://api.gapgpt.app/v1",
-    "model": "gpt-5.1-codex-mini",
-    "timeout": 60,
-    "seed": 1234
+    "provider": "api",
+    "profiles": {
+      "api": {
+        "api_key_path": "api_key.txt",
+        "api_url": "https://api.gapgpt.app/v1",
+        "model": "gpt-4o-mini",
+        "timeout": 60,
+        "seed": 1234
+      },
+      "local": {
+        "api_url": "http://127.0.0.1:11434/v1",
+        "model": "gemma3:12b",
+        "timeout": 120,
+        "seed": 1234
+      }
+    }
   }
 }
-
-

@@ -16,12 +16,13 @@ from src.core.planning_C import planningC_gen_code
 from src.core.cot_planning import coding
 from src.core.planning_D import planningD_gen_code
 from src.core.persona import persona_gen_code
+from src.config_loader import override_config
 
 def dataset_registered(name: str):
     module_map = {
         "securityeval": "src.data.securityeval",
         "llmseceval": "src.data.llmseceval",
-        "sallm": "src.data.sallm",
+        "sallm": "src.data.sallm"
     }
     mod = module_map.get(name.lower())
     if not mod:
@@ -153,7 +154,7 @@ def run_persona(dataset: str, filename: str, limit: int):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Secure CodeGen CLI (Bandit-only)")
+    parser = argparse.ArgumentParser(description="Secure CodeGen CLI")
     parser.add_argument(
         "--mode",
         choices=["direct", "planning_A", "naive_secure", "rci", "self_refine", "planning_B", "one_shot","cot","planning_C","cot_planning","planning_D","persona"],
@@ -164,7 +165,11 @@ def main():
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--iterations", type=int, default=0)
     parser.add_argument("--k", type=int, default=5)
+    parser.add_argument("--provider", choices=["api", "local"], required=True)
+
     args = parser.parse_args()
+    
+    override_config({"llm": {"provider": args.provider}})
 
     if args.mode == "direct":
         run_direct(args.dataset, args.file, args.limit)
@@ -182,7 +187,7 @@ def main():
         run_one_shot(args.dataset, args.file, args.limit, args.k)
     elif args.mode == "cot":
         run_cot(args.dataset, args.file, args.limit)
-    if args.mode == "planning_C":
+    elif args.mode == "planning_C":
         run_planning_C(args.dataset, args.file, args.limit, args.iterations)
     elif args.mode == "cot_planning":
         run_cot_planning(args.dataset, args.file, args.limit)
