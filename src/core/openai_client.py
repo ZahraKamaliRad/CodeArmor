@@ -17,6 +17,7 @@ class LLMClient:
         profiles = root.get("profiles", {})
         cfg = profiles.get(active_provider, root)
 
+        self.provider = active_provider
         self.model = model or cfg.get("model")
         if not self.model:
             raise ValueError("No model specified in config.json for the selected provider")
@@ -41,15 +42,44 @@ class LLMClient:
 
         self.client = OpenAI(**client_kwargs)
 
-    def generate_text(self,prompt: str,
-        track_tokens: bool = True,log_file: str | None = None,
-        extra_token_meta: dict | None = None) -> str:
-        
-        resp = self.client.chat.completions.create(
-            model=self.model,messages=[{"role": "user", "content": prompt}],seed=self.seed)
+        print(f"[LLM INIT] Provider: {self.provider} | Model: {self.model}")
+        if base_url:
+            print(f"[LLM INIT] Base URL: {base_url}")
 
-        content = resp.choices[0].message.content
-        text = content.strip() if isinstance(content, str) else "".join(map(str, content)).strip()
+    def generate_text(self,prompt: str,track_tokens: bool = True,
+        log_file: str | None = None,extra_token_meta: dict | None = None) -> str:
+
+        print(f"[LLM CALL] Sending request to model: {self.model}")
+
+        is_local = self.provider == "local"
+
+        if is_local:
+            print("[LLM CALL] Running in LOCAL mode...")
+
+            resp = self.client.completions.create(
+                model=self.model,
+                prompt=prompt,
+            )
+
+            text = (resp.choices[0].text or "").strip()
+
+        else:
+            print("[LLM CALL] Running in API mode...")
+
+            resp = self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                seed=self.seed,
+            )
+
+            content = resp.choices[0].message.content
+            text = (
+                content.strip()
+                if isinstance(content, str)
+                else "".join(map(str, content)).strip()
+            )
+
+        print("[LLM CALL] Response received.")
 
         if track_tokens and getattr(resp, "usage", None) is not None:
             u = resp.usage
@@ -57,7 +87,7 @@ class LLMClient:
                 getattr(u, "prompt_tokens", 0) or 0,
                 getattr(u, "completion_tokens", 0) or 0,
                 log_file=log_file,
-                extra=extra_token_meta,
+                extra=extra_token_meta
             )
 
         return text

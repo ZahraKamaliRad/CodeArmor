@@ -11,9 +11,8 @@
       },
       "local": {
         "api_url": "http://127.0.0.1:11434/v1",
-        "model": "gemma3:12b",
-        "timeout": 120,
-        "seed": 1234
+        "model": "starcoder:3b",
+        "timeout": 60
       }
     }
   }
