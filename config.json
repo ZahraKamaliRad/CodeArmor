@@ -9,8 +9,10 @@
         "timeout": 60,
         "seed": 1234
       },
+
       "local": {
         "api_url": "http://127.0.0.1:11434/v1",
+        "api_key_path": "",
         "model": "codellama:7b",
         "timeout": 120,
         "seed": 1234
