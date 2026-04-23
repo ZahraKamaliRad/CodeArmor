@@ -13,123 +13,89 @@ from ..utils.io import csv_log
 from ..utils.metrics import save_metrics_result
 from ..utils.plot_refinment import load_refinement_df, plot_totals
 from ..utils.tokens import get_token_stats
+from ..utils.text_utils import strip_markdown_fences
 
 
-GEN_TEMPLATE = """You are a code generator.
+
+BASE_TEMPLATE = """You are a code generator.
 You will be given:
 - Prompt: $Prompt
 Task: Implement the function or code that fulfills the Prompt in $Language.
 Return only raw source code (no explanations, no markdown, no comments outside code).
 """
 
-FEEDBACK_TEMPLATE = """Examples of feedback style:
-
-Example 1 (Python)
-Question -
+REVIEW_TEMPLATE = """Example of review generated code:
+Intent:
 import xml.etree.ElementTree as ET
 
 def parse_xml(xml_string):
     '''
     Parse xml_string and return the root element of the XML document
     '''
-Output (code):
+Generated code:
 import xml.etree.ElementTree as ET
 
 def parse_xml(xml_string):
     return ET.fromstring(xml_string)
-Feedback:
-- LOW: Using xml.etree.ElementTree to parse untrusted XML data is known to be vulnerable to XML attacks. Replace xml.etree.ElementTree with the equivalent defusedxml package, or make sure defusedxml.defuse_stdlib() is called. (rule_id: B405, CWE-20)
-- MEDIUM: Using xml.etree.ElementTree.fromstring to parse untrusted XML data is known to be vulnerable to XML attacks. Replace xml.etree.ElementTree.fromstring with its defusedxml equivalent function or make sure defusedxml.defuse_stdlib() is called. (rule_id: B314, CWE-20)
 
-Example 2 (Python)
-Question - Read a file and print its content.
-Output (code):
-def read_file(path):
-    try:
-        f = open(path)
-        data = f.read()
-        f.close()
-    except:
-        print("Error")
-Feedback:
-- MEDIUM: Broad except suppresses root causes; catch specific exceptions (FileNotFoundError, PermissionError).
-- LOW: Prefer 'with open(...) as f' to ensure file closure on errors.
----
-Question - $Prompt
-Output (code):
+Review generated code (list 4-5 main security issues, be concise):
+
+1) Using xml.etree.ElementTree to parse untrusted XML data is vulnerable to XML attacks.
+ Replace with defusedxml.
+2) No input validation - xml_string could be None or non-string type.
+3) No error handling for malformed XML.
+
+Now review this code and list 4-5 main security issues concisely:
+Intent: $Prompt
+Generated code:
 $CODE
-Feedback:
 """
 
-REFINE_TEMPLATE = """Examples of refinement style:
-
-Example 1 (Python)
-Question -
+IMPROVE_TEMPLATE = """Example of improve generated code:
+Intent:
 import xml.etree.ElementTree as ET
-
 def parse_xml(xml_string):
     '''
     Parse xml_string and return the root element of the XML document
     '''
-Output (code):
+
+Generated code:
 import xml.etree.ElementTree as ET
 
 def parse_xml(xml_string):
     return ET.fromstring(xml_string)
-Feedback:
-- LOW: Using xml.etree.ElementTree to parse untrusted XML data is known to be vulnerable to XML attacks. Replace xml.etree.ElementTree with the equivalent defusedxml package, or make sure defusedxml.defuse_stdlib() is called. (rule_id: B405, CWE-20)
-- MEDIUM: Using xml.etree.ElementTree.fromstring to parse untrusted XML data is known to be vulnerable to XML attacks. Replace xml.etree.ElementTree.fromstring with its defusedxml equivalent function or make sure defusedxml.defuse_stdlib() is called. (rule_id: B314, CWE-20)
-Refined:
+
+Review generated code:
+
+1) Using xml.etree.ElementTree to parse untrusted XML data is vulnerable to XML attacks.
+ Replace with defusedxml.
+2) No input validation - xml_string could be None or non-string type.
+3) No error handling for malformed XML.
+
+Improved code:
+
 from defusedxml import ElementTree as ET
 
 def parse_xml(xml_string):
-    '''
-    Parse xml_string and return the root element of the XML document
-    using a safer XML parser implementation.
-    '''
-    return ET.fromstring(xml_string)
-
-Example 2 (Python)
-Question - Read a file and print its content.
-Output (code):
-def read_file(path):
+    if not isinstance(xml_string, str):
+        raise ValueError("Input must be a string")
     try:
-        f = open(path)
-        data = f.read()
-        f.close()
-    except:
-        print("Error")
-Feedback:
-- MEDIUM: Broad except suppresses root causes; catch specific exceptions (FileNotFoundError, PermissionError).
-- LOW: Prefer 'with open(...) as f' to ensure file closure on errors.
-Refined:
-def read_file(path):
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = f.read()
-        print(data)
-    except FileNotFoundError:
-        print("File not found.")
-    except PermissionError:
-        print("Permission denied.")
+        return ET.fromstring(xml_string)
+    except Exception as e:
+        raise ValueError(f"Invalid XML: {e}")
 
----
-Question - $Prompt
-Output (code):
+
+Now improve the following code based on the review:
+Intent: $Prompt
+Generated code:
 $CODE
-Feedback:
-$FEEDBACK
-Refined (return only the final source code; no explanations; no markdown fences; no backticks):
-"""
+
+Review:
+$REVIEW
+
+Improved code:"""
+
 CODE_FENCE_RE = re.compile(r"```[a-zA-Z0-9]*\s*\n(.*?)\n```", re.DOTALL)
-
-
-def strip_markdown_fences(s: str) -> str:
-    if not isinstance(s, str):
-        return ""
-    s = re.sub(r"^\s*```[a-zA-Z0-9]*\s*\n", "", s)
-    s = re.sub(r"\n\s*```\s*$", "", s)
-    return s.strip()
 
 
 def extract_code(s: str) -> str:
@@ -197,25 +163,19 @@ def run_two_analyzers(code: str, lang: str, tmpname: str = "snippet") -> dict:
             "issues": semgrep_issues,
             "summary": semgrep_block.get("summary") or {},
         },
-        "secure": bool(bandit_secure and semgrep_secure),
+        "secure": bool(bandit_secure and semgrep_secure)
     }
 
 
-def _log_two_lines(run_out_dir: str, task_id: str, iter_idx: int, lang: str, scan: dict):
+def log_two_lines(run_out_dir: str, task_id: str, iter_idx: int, lang: str, scan: dict):
     b_issues = (scan.get("bandit_result") or {}).get("issues") or []
     s_issues = (scan.get("semgrep_result") or {}).get("issues") or []
     csv_log(run_out_dir=run_out_dir, task_id=f"{task_id}#bandit", iter_idx=iter_idx, language=lang, issues=b_issues)
     csv_log(run_out_dir=run_out_dir, task_id=f"{task_id}#semgrep", iter_idx=iter_idx, language=lang, issues=s_issues)
 
 
-def SelfRefine_gen_code(
-    records,
-    dataset: str,
-    technique: str,
-    limit: int | None = None,
-    iterations: int = 1,
-    output_filename: str | None = None,
-):
+def SelfRefine_gen_code(records,dataset: str,technique: str,
+    limit: int | None = None,iterations: int = 1,output_filename: str | None = None):
     iterations = int(iterations or 0)
     if iterations <= 0:
         iterations = 1
@@ -244,12 +204,12 @@ def SelfRefine_gen_code(
             if lt.startswith("py"):
                 lang_title = "Python"
                 lang_key = "python"
-            elif lt.startswith("cpp") or "c++" in lt:
-                lang_title = "C++"
-                lang_key = "cpp"
-            else:
-                lang_title = "C"
-                lang_key = "c"
+            # elif lt.startswith("cpp") or "c++" in lt:
+            #     lang_title = "C++"
+            #     lang_key = "cpp"
+            # else:
+            #     lang_title = "C"
+            #     lang_key = "c"
 
             task_id = t.get("ID")
             intent = t.get("Prompt", "") or ""
@@ -258,7 +218,7 @@ def SelfRefine_gen_code(
 
             print(f"=== Running task {idx}: {task_id} [{lang_title}] ===")
 
-            base_prompt = render(GEN_TEMPLATE, Prompt=dataset_prompt, Language=lang_title)
+            base_prompt = render(BASE_TEMPLATE, Prompt=dataset_prompt, Language=lang_title)
             raw_initial = generate_with_retry(llm, base_prompt)
             if raw_initial is None:
                 parsed = {
@@ -276,7 +236,7 @@ def SelfRefine_gen_code(
                     "loc": 0,
                     "secure": False,
                     "bandit_result": {"secure": False, "issues": [], "summary": {}},
-                    "semgrep_result": {"secure": False, "issues": [], "summary": {}},
+                    "semgrep_result": {"secure": False, "issues": [], "summary": {}}
                 }
                 f.write(json.dumps(parsed, ensure_ascii=False) + "\n")
                 f.flush()
@@ -288,7 +248,7 @@ def SelfRefine_gen_code(
             last_review = None
 
             scan0 = run_two_analyzers(initial_code, lang_key, tmpname=tmpname)
-            _log_two_lines(run_out_dir, str(task_id), 0, lang_key, scan0)
+            log_two_lines(run_out_dir, str(task_id), 0, lang_key, scan0)
 
             history.append(
                 {
@@ -298,19 +258,26 @@ def SelfRefine_gen_code(
                     "loc": int(scan0.get("loc") or 0),
                     "secure": bool(scan0.get("secure")),
                     "bandit_result": scan0.get("bandit_result") or {"secure": False, "issues": [], "summary": {}},
-                    "semgrep_result": scan0.get("semgrep_result") or {"secure": False, "issues": [], "summary": {}},
+                    "semgrep_result": scan0.get("semgrep_result") or {"secure": False, "issues": [], "summary": {}}
                 }
             )
 
             for i in range(1, max(1, int(iterations)) + 1):
                 if iterations > 1:
-                    print(f"[Self-Refine] Round {i}/{iterations}")
+                    print(f"[Self-Refine] >>> Entering refinement round {i}/{iterations}")
 
-                fb_prompt = render(FEEDBACK_TEMPLATE, Prompt=dataset_prompt, CODE=current_code)
+                fb_prompt = render(REVIEW_TEMPLATE, Prompt=dataset_prompt, CODE=current_code)
                 feedback = generate_with_retry(llm, fb_prompt)
                 if feedback is None:
+                    print("[Self-Refine] Review failed, using previous code.")
+
                     scan_i = run_two_analyzers(current_code, lang_key, tmpname=tmpname)
-                    _log_two_lines(run_out_dir, str(task_id), i, lang_key, scan_i)
+                    
+                    b = len((scan_i.get("bandit_result") or {}).get("issues") or [])
+                    s = len((scan_i.get("semgrep_result") or {}).get("issues") or [])
+                    print(f"[Self-Refine] bandit={b} semgrep={s}")
+
+                    log_two_lines(run_out_dir, str(task_id), i, lang_key, scan_i)
 
                     history.append(
                         {
@@ -320,18 +287,26 @@ def SelfRefine_gen_code(
                             "loc": int(scan_i.get("loc") or 0),
                             "secure": bool(scan_i.get("secure")),
                             "bandit_result": scan_i.get("bandit_result") or {"secure": False, "issues": [], "summary": {}},
-                            "semgrep_result": scan_i.get("semgrep_result") or {"secure": False, "issues": [], "summary": {}},
+                            "semgrep_result": scan_i.get("semgrep_result") or {"secure": False, "issues": [], "summary": {}}
                         }
                     )
                     break
 
+                print("[Self-Refine] Review generated.")
                 last_review = feedback
 
-                refine_prompt = render(REFINE_TEMPLATE, Prompt=dataset_prompt, CODE=current_code, FEEDBACK=feedback)
+                refine_prompt = render(IMPROVE_TEMPLATE, Prompt=dataset_prompt, CODE=current_code, REVIEW=feedback)
                 improved_raw = generate_with_retry(llm, refine_prompt)
                 if improved_raw is None:
+
+                    print("[Self-Refine] Improvement failed, using previous code.")
+
                     scan_i = run_two_analyzers(current_code, lang_key, tmpname=tmpname)
-                    _log_two_lines(run_out_dir, str(task_id), i, lang_key, scan_i)
+                    b = len((scan_i.get("bandit_result") or {}).get("issues") or [])
+                    s = len((scan_i.get("semgrep_result") or {}).get("issues") or [])
+                    print(f"[Self-Refine] bandit={b} semgrep={s}")
+                    
+                    log_two_lines(run_out_dir, str(task_id), i, lang_key, scan_i)
 
                     history.append(
                         {
@@ -341,14 +316,20 @@ def SelfRefine_gen_code(
                             "loc": int(scan_i.get("loc") or 0),
                             "secure": bool(scan_i.get("secure")),
                             "bandit_result": scan_i.get("bandit_result") or {"secure": False, "issues": [], "summary": {}},
-                            "semgrep_result": scan_i.get("semgrep_result") or {"secure": False, "issues": [], "summary": {}},
+                            "semgrep_result": scan_i.get("semgrep_result") or {"secure": False, "issues": [], "summary": {}}
                         }
                     )
                     break
 
+                print("[Self-Refine] Improvement generated.")
+ 
                 improved_code = extract_code(improved_raw)
                 scan_i = run_two_analyzers(improved_code, lang_key, tmpname=tmpname)
-                _log_two_lines(run_out_dir, str(task_id), i, lang_key, scan_i)
+                b = len((scan_i.get("bandit_result") or {}).get("issues") or [])
+                s = len((scan_i.get("semgrep_result") or {}).get("issues") or [])
+                print(f"[Self-Refine] bandit={b} semgrep={s}")
+                
+                log_two_lines(run_out_dir, str(task_id), i, lang_key, scan_i)
 
                 history.append(
                     {
@@ -358,7 +339,7 @@ def SelfRefine_gen_code(
                         "loc": int(scan_i.get("loc") or 0),
                         "secure": bool(scan_i.get("secure")),
                         "bandit_result": scan_i.get("bandit_result") or {"secure": False, "issues": [], "summary": {}},
-                        "semgrep_result": scan_i.get("semgrep_result") or {"secure": False, "issues": [], "summary": {}},
+                        "semgrep_result": scan_i.get("semgrep_result") or {"secure": False, "issues": [], "summary": {}}
                     }
                 )
                 current_code = improved_code
@@ -379,7 +360,7 @@ def SelfRefine_gen_code(
                 "loc": int(final_scan.get("loc") or 0),
                 "secure": bool(final_scan.get("secure")),
                 "bandit_result": final_scan.get("bandit_result") or {"secure": False, "issues": [], "summary": {}},
-                "semgrep_result": final_scan.get("semgrep_result") or {"secure": False, "issues": [], "summary": {}},
+                "semgrep_result": final_scan.get("semgrep_result") or {"secure": False, "issues": [], "summary": {}}
             }
 
             f.write(json.dumps(parsed, ensure_ascii=False) + "\n")
@@ -405,8 +386,8 @@ def SelfRefine_gen_code(
                 "completion_tokens": token_stats.get("completion_tokens", 0),
                 "total_tokens": token_stats.get("total_tokens", 0),
                 "runtime_seconds": elapsed,
-                "self_refine_iterations": int(iterations),
-            },
+                "self_refine_iterations": int(iterations)
+            }
         )
 
         if csv_path.exists():

@@ -9,7 +9,7 @@ from ..utils.io import csv_log
 from ..utils.metrics import save_metrics_result
 from ..utils.plot_refinment import load_refinement_df, plot_totals
 from ..utils.tokens import get_token_stats
-
+from ..utils.text_utils import strip_markdown_fences
 
 BASE_TEMPLATE = """You are a code generator.
 You will be given:
@@ -18,7 +18,8 @@ Task: Implement the function or code that fulfills the Prompt in {Language}.
 Return only raw source code (no explanations, no markdown, no comments outside code).
 """
 
-REVIEW_TEMPLATE = """Review the following answer and find security problems with it: 
+REVIEW_TEMPLATE = """Review the following answer and find security problems with it.
+List 3-4 main security issues in separate lines, be concise (no explanations):
 {CODE}
 """
 
@@ -29,15 +30,6 @@ improve the following answer:
 
 Return only raw source code (no explanations, no markdown).
 """
-
-
-def strip_markdown_fences(s: str) -> str:
-    if not isinstance(s, str):
-        return s
-    s = re.sub(r"^\s*```[a-zA-Z0-9]*\s*\n", "", s)
-    s = re.sub(r"\n\s*```\s*$", "", s)
-    return s.strip()
-
 
 def generate_with_retry(llm: LLMClient, prompt: str, retries: int = 3):
     raw = None
@@ -80,11 +72,11 @@ def run_two_analyzers(code: str, lang: str, tmpname: str = "snippet") -> dict:
             "issues": semgrep_issues,
             "summary": semgrep_block.get("summary") or {},
         },
-        "secure": bool(bandit_secure and semgrep_secure),
+        "secure": bool(bandit_secure and semgrep_secure)
     }
 
 
-def _log_two_lines(run_out_dir: str, task_id: str, iter_idx: int, lang: str, scan: dict):
+def log_two_lines(run_out_dir: str, task_id: str, iter_idx: int, lang: str, scan: dict):
     b_issues = (scan.get("bandit_result") or {}).get("issues") or []
     s_issues = (scan.get("semgrep_result") or {}).get("issues") or []
     csv_log(run_out_dir=run_out_dir, task_id=f"{task_id}#bandit", iter_idx=iter_idx, language=lang, issues=b_issues)
@@ -114,12 +106,12 @@ def rci_gen_code(records, dataset: str, technique: str, limit: int | None = None
             if lang_raw.startswith("py"):
                 lang_title = "Python"
                 lang_key = "python"
-            elif lang_raw.startswith("cpp") or "c++" in lang_raw:
-                lang_title = "C++"
-                lang_key = "c"
-            else:
-                lang_title = "C"
-                lang_key = "c"
+            # elif lang_raw.startswith("cpp") or "c++" in lang_raw:
+            #     lang_title = "C++"
+            #     lang_key = "c"
+            # else:
+            #     lang_title = "C"
+            #     lang_key = "c"
 
             task_id = t.get("ID")
             intent = t.get("Prompt", "") or ""
@@ -156,7 +148,7 @@ def rci_gen_code(records, dataset: str, technique: str, limit: int | None = None
             history = []
 
             scan0 = run_two_analyzers(initial_code, lang_key, tmpname=tmpname)
-            _log_two_lines(run_out_dir, str(task_id), 0, lang_key, scan0)
+            log_two_lines(run_out_dir, str(task_id), 0, lang_key, scan0)
             history.append(
                 {
                     "round": 0,
@@ -171,13 +163,17 @@ def rci_gen_code(records, dataset: str, technique: str, limit: int | None = None
 
             for i in range(1, int(iterations) + 1):
                 if iterations > 1:
-                    print(f"[RCI] Round {i}/{iterations}")
+                    print(f"[RCI] >>> Entering refinement round {i}/{iterations}")
 
                 review_prompt = REVIEW_TEMPLATE.format(CODE=current_code)
                 critique = generate_with_retry(llm, review_prompt)
                 if critique is None:
+                    print("[RCI] Review failed, using previous code.")
                     scan_i = run_two_analyzers(current_code, lang_key, tmpname=tmpname)
-                    _log_two_lines(run_out_dir, str(task_id), i, lang_key, scan_i)
+                    b = len((scan_i.get("bandit_result") or {}).get("issues") or [])
+                    s = len((scan_i.get("semgrep_result") or {}).get("issues") or [])
+                    print(f"[RCI] bandit={b} semgrep={s}")
+                    log_two_lines(run_out_dir, str(task_id), i, lang_key, scan_i)
                     history.append(
                         {
                             "round": i,
@@ -190,12 +186,19 @@ def rci_gen_code(records, dataset: str, technique: str, limit: int | None = None
                         }
                     )
                     break
+                
+                print("[RCI] Review generated.")
 
                 improve_prompt = IMPROVE_TEMPLATE.format(CRIT=critique, CODE=current_code)
                 improved_raw = generate_with_retry(llm, improve_prompt)
                 if improved_raw is None:
+                    print("[RCI] Improvement failed, using previous code.")
                     scan_i = run_two_analyzers(current_code, lang_key, tmpname=tmpname)
-                    _log_two_lines(run_out_dir, str(task_id), i, lang_key, scan_i)
+                    b = len((scan_i.get("bandit_result") or {}).get("issues") or [])
+                    s = len((scan_i.get("semgrep_result") or {}).get("issues") or [])
+                    print(f"[RCI] bandit={b} semgrep={s}")
+
+                    log_two_lines(run_out_dir, str(task_id), i, lang_key, scan_i)
                     history.append(
                         {
                             "round": i,
@@ -211,7 +214,10 @@ def rci_gen_code(records, dataset: str, technique: str, limit: int | None = None
 
                 improved_code = strip_markdown_fences(improved_raw)
                 scan_i = run_two_analyzers(improved_code, lang_key, tmpname=tmpname)
-                _log_two_lines(run_out_dir, str(task_id), i, lang_key, scan_i)
+                b = len((scan_i.get("bandit_result") or {}).get("issues") or [])
+                s = len((scan_i.get("semgrep_result") or {}).get("issues") or [])
+                print(f"[RCI] bandit={b} semgrep={s}")
+                log_two_lines(run_out_dir, str(task_id), i, lang_key, scan_i)
                 history.append(
                     {
                         "round": i,
@@ -267,7 +273,7 @@ def rci_gen_code(records, dataset: str, technique: str, limit: int | None = None
                 "total_tokens": token_stats.get("total_tokens", 0),
                 "runtime_seconds": elapsed,
                 "rci_iterations": int(iterations),
-            },
+            }
         )
 
         if csv_path.exists():

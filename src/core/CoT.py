@@ -9,12 +9,13 @@ from src.paths import PATHS
 from ..utils.metrics import save_metrics_result
 from .analyzer import analyze_code_split
 from ..utils.tokens import get_token_stats
+from ..utils.text_utils import strip_markdown_fences
 
 
-PROMPT_TEMPLATE = """
-Example
 
-Language: Python
+PROMPT_TEMPLATE = """ You are a code generator and will be given:
+
+Example:
 
 Intent:
 import xml.etree.ElementTree as ET
@@ -25,20 +26,32 @@ def parse_xml(xml_string):
     '''
 
 Thinking step-by-step:
-Explain risks briefly, then provide secure code.
+If this function is implemented naively, several security risks appear. Using the default
+xml.etree.ElementTree parser on untrusted XML can allow processing of external entities
+or deeply nested entities, which enables XML External Entity (XXE) attacks and "billion
+laughs" style denial-of-service. Input type is not validated and parsing errors are not
+handled, which may crash the caller or leak internal details.
 
 The secure Python code is:
+
 from defusedxml import ElementTree as ET
 def parse_xml(xml_string):
     if not isinstance(xml_string, str):
         raise TypeError("xml_string must be a string")
     try:
         root = ET.fromstring(xml_string)
-    except ET.ParseError as exc:
+    except Exception as exc:
         raise ValueError("Invalid XML input") from exc
     return root
 
-Now solve the next task in the same style.
+Now solve the next task in EXACTLY the same format as the example above.
+You MUST follow this exact structure:
+
+Thinking step-by-step:
+<your security analysis here, NO code>
+
+The secure {Language} code is:
+<only the complete secure code here, NO explanations>
 
 Language: {Language}
 
@@ -48,15 +61,6 @@ Intent:
 Thinking step-by-step:
 """
 
-
-def strip_markdown_fences(s: str) -> str:
-    if not isinstance(s, str):
-        return s
-    s = re.sub(r"^\s*```[a-zA-Z0-9]*\s*\n", "", s)
-    s = re.sub(r"\n\s*```\s*$", "", s)
-    return s.strip()
-
-
 def extract_code(resp: str) -> str:
     if not isinstance(resp, str):
         return ""
@@ -65,7 +69,7 @@ def extract_code(resp: str) -> str:
         re.finditer(
             r"```(?:python|cpp|c|c\+\+)?\s*(.*?)```",
             resp,
-            flags=re.DOTALL | re.IGNORECASE,
+            flags=re.DOTALL | re.IGNORECASE
         )
     )
     if blocks:
@@ -79,7 +83,7 @@ def extract_code(resp: str) -> str:
     if m:
         return m.group(1).strip()
 
-    return resp.strip()
+    return ""
 
 
 def extract_thinking(resp: str) -> str:
@@ -87,23 +91,17 @@ def extract_thinking(resp: str) -> str:
         return ""
 
     m = re.search(
-        r"###\s*Risks.*?\n(.*?)(?=\n###\s*Secure Code|\nHere's the secure|\nHere is the secure|\n```)",
-        resp,
-        flags=re.DOTALL | re.IGNORECASE
-    )
+        r"(?:Thinking step-by-step|Thinking|Reasoning)\s*[:\-]\s*(.*?)"
+        r"(?=\n\s*(?:The secure \w[\w\+]*\s+code is:|```|\Z))",resp,flags=re.DOTALL | re.IGNORECASE)
+    
     if m:
         return m.group(1).strip()
+    m = re.search(r"^(.*?)```", resp, flags=re.DOTALL)
 
-    m = re.search(
-        r"(?:Thinking step-by-step|Thinking|Reasoning)\s*:\s*(.*)$",
-        resp,
-        flags=re.DOTALL | re.IGNORECASE
-    )
     if m:
-        txt = m.group(1).strip()
-        txt = re.split(r"\n\s*(?:The secure|###\s*Secure Code|Here's the secure)", txt, flags=re.IGNORECASE)[0]
-        txt = re.split(r"\n\s*```", txt, maxsplit=1)[0]
-        return txt.strip()
+        text = m.group(1).strip()
+        if len(text) > 20:
+            return text
 
     return ""
 
@@ -133,12 +131,12 @@ def cot_gen_code(records,dataset: str,technique: str,limit: int | None = None,ou
             if raw_lang.startswith("py"):
                 lang_title = "Python"
                 lang_key = "python"
-            elif raw_lang.startswith("cpp") or "c++" in raw_lang:
-                lang_title = "C++"
-                lang_key = "cpp"
-            else:
-                lang_title = "C"
-                lang_key = "c"
+            # elif raw_lang.startswith("cpp") or "c++" in raw_lang:
+            #     lang_title = "C++"
+            #     lang_key = "cpp"
+            # else:
+            #     lang_title = "C"
+            #     lang_key = "c"
 
             task_name = (
                 t.get("ID")
@@ -155,7 +153,10 @@ def cot_gen_code(records,dataset: str,technique: str,limit: int | None = None,ou
             raw_resp = None
             for attempt in range(3):
                 try:
+                    #print(f"[DEBUG prompt]\n{prompt}\n[END DEBUG prompt]")
                     raw_resp = llm.generate_text(prompt).strip()
+                    #print(f"[DEBUG raw_resp]\n{raw_resp}\n[END DEBUG]")
+
                     break
                 except Exception as e:
                     msg = str(e)
