@@ -9,7 +9,7 @@ Choose the appropriate script based on the prompt engineering method used to gen
 python html_report.py --i <path_to_jsonl>
 ```
 
-### Chain-of-Thought (CoT)
+### Chain-of-Thought (CoT)  
 ```bash
 python cot_html_report.py --i <path_to_jsonl>
 ```
