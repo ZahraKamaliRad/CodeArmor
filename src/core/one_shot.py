@@ -18,8 +18,7 @@ from ..utils.tokens import get_token_stats
 from ..utils.text_utils import strip_markdown_fences
 
 
-# RETRIEVAL_DATASET_PATH = Path(r"E:\secure_codegenration\src\retrieval\data\retrieval_examples.jsonl")
-# EMBEDDING_MODEL_PATH = r"E:\all-MiniLM-L6-v2"
+
 load_dotenv()
 
 RETRIEVAL_DATASET_PATH = Path(os.getenv("RETRIEVAL_DATASET_PATH"))
