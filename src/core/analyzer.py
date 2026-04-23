@@ -6,8 +6,8 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+ENABLE_SEMGREP = True
 Issue = Dict[str, Any]
-
 
 def which_or_raise(cmd: str) -> str:
     if shutil.which(cmd) is None:
@@ -18,7 +18,6 @@ def which_or_raise(cmd: str) -> str:
 def lang_key(language: str) -> str:
     return (language or "").strip().lower()
 
-
 def extension_for_language(language: str) -> str:
     lk = lang_key(language)
     if lk in ("py", "python"):
@@ -27,10 +26,8 @@ def extension_for_language(language: str) -> str:
         return ".c"
     return ".txt"
 
-
 def count_loc(code: str) -> int:
     return sum(1 for ln in (code or "").splitlines() if ln.strip())
-
 
 def normalize_severity(v: Optional[str]) -> str:
     if not v:
@@ -50,8 +47,7 @@ def normalize_severity(v: Optional[str]) -> str:
         return "MEDIUM"
     return "LOW"
 
-
-def _to_cwe_key(x: Any) -> Optional[str]:
+def to_cwe_key(x: Any) -> Optional[str]:
     if x is None:
         return None
     s = str(x).strip()
@@ -64,30 +60,25 @@ def _to_cwe_key(x: Any) -> Optional[str]:
         return m.group(1).upper()
     return None
 
-
-def _extract_cwe_keys(cwe_field: Any) -> List[str]:
+def extract_cwe_keys(cwe_field: Any) -> List[str]:
     keys: List[str] = []
     if cwe_field is None:
         return keys
     if isinstance(cwe_field, list):
         for item in cwe_field:
-            k = _to_cwe_key(item)
+            k = to_cwe_key(item)
             if k:
                 keys.append(k)
         return keys
-    k = _to_cwe_key(cwe_field)
+    k = to_cwe_key(cwe_field)
     if k:
         keys.append(k)
     return keys
 
-
 def run_bandit(fpath: Path) -> List[Issue]:
     which_or_raise("bandit")
     p = subprocess.run(
-        ["bandit", "-q", "-f", "json", str(fpath)],
-        capture_output=True,
-        text=True,
-    )
+        ["bandit", "-q", "-f", "json", str(fpath)],capture_output=True,text=True)
     out = (p.stdout or "").strip()
     if not out:
         return []
@@ -108,11 +99,10 @@ def run_bandit(fpath: Path) -> List[Issue]:
                 "cwe": cwe_id,
                 "severity": normalize_severity(r.get("issue_severity")),
                 "message": r.get("issue_text"),
-                "line": int(r.get("line_number") or 0),
+                "line": int(r.get("line_number") or 0)
             }
         )
     return issues
-
 
 def semgrep_extract_cwe(meta: Dict[str, Any]) -> Optional[Union[str, List[Any]]]:
     cwe = meta.get("cwe")
@@ -122,14 +112,10 @@ def semgrep_extract_cwe(meta: Dict[str, Any]) -> Optional[Union[str, List[Any]]]
         return cwe.strip()
     return None
 
-
 def run_semgrep(fpath: Path) -> List[Issue]:
     which_or_raise("semgrep")
     p = subprocess.run(
-        ["semgrep", "--json", "--quiet", str(fpath)],
-        capture_output=True,
-        text=True,
-    )
+        ["semgrep", "--json", "--quiet", str(fpath)],capture_output=True,text=True)
     out = (p.stdout or "").strip()
     if not out:
         return []
@@ -153,7 +139,7 @@ def run_semgrep(fpath: Path) -> List[Issue]:
                 "cwe": cwe_raw,
                 "severity": normalize_severity(sev),
                 "message": msg,
-                "line": line,
+                "line": line
             }
         )
     return issues
@@ -161,6 +147,7 @@ def run_semgrep(fpath: Path) -> List[Issue]:
 
 def analyze_code(code: str,language: str,tools: Optional[List[str]] = None,
     tmpname: str = "snippet",) -> Tuple[List[Issue], int, Dict[str, Any]]:
+    
     selected = [t.strip().lower() for t in (tools or ["bandit", "semgrep"]) if t and t.strip()]
     ext = extension_for_language(language)
     stable_filename = f"{tmpname}{ext}"
@@ -193,7 +180,7 @@ def analyze_code(code: str,language: str,tools: Optional[List[str]] = None,
         for iss in all_issues:
             sev = (iss.get("severity") or "LOW").upper()
             severity_counts[sev] = severity_counts.get(sev, 0) + 1
-            for cwe_key in _extract_cwe_keys(iss.get("cwe")):
+            for cwe_key in extract_cwe_keys(iss.get("cwe")):
                 cwe_counts[cwe_key] = cwe_counts.get(cwe_key, 0) + 1
 
         summary: Dict[str, Any] = {
@@ -212,21 +199,28 @@ def analyze_code(code: str,language: str,tools: Optional[List[str]] = None,
 
 def analyze_code_split(code: str, language: str, tmpname: str = "snippet") -> Dict[str, Any]:
     bandit_issues, loc, bandit_summary = analyze_code(code, language, tools=["bandit"], tmpname=tmpname)
-    semgrep_issues, _, semgrep_summary = analyze_code(code, language, tools=["semgrep"], tmpname=tmpname)
 
+    if ENABLE_SEMGREP:
+        semgrep_issues, _, semgrep_summary = analyze_code(code, language, tools=["semgrep"], tmpname=tmpname)
+        semgrep_secure = bool(semgrep_summary.get("secure"))
+    else:
+        semgrep_issues = []
+        semgrep_summary = {
+            "secure": True,
+            "severity_counts": {},
+            "cwe_counts": {}
+        }
+        semgrep_secure = True
     return {
         "loc": int(loc),
         "bandit_result": {
             "issues": bandit_issues,
             "summary": bandit_summary,
-            "secure": bool(bandit_summary.get("secure")),
+            "secure": bool(bandit_summary.get("secure"))
         },
         "semgrep_result": {
             "issues": semgrep_issues,
             "summary": semgrep_summary,
-            "secure": bool(semgrep_summary.get("secure")),
+            "secure": semgrep_secure
         }
     }
-
-
-
