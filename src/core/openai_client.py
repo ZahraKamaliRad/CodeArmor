@@ -20,6 +20,8 @@ class LLMClient:
         if not self.model:
             raise ValueError("No model specified in config.json for the selected provider")
 
+        self.temperature = cfg.get("temperature", None)
+
         seed = cfg.get("seed", None)
         self.seed = int(seed) if seed is not None else None
 
@@ -48,7 +50,9 @@ class LLMClient:
             print(f"[LLM INIT] Base URL: {base_url}")
 
     def generate_text(self,prompt: str,track_tokens: bool = True,
-        log_file: str | None = None,extra_token_meta: dict | None = None) -> str:
+    log_file: str | None = None,extra_token_meta: dict | None = None,temperature: float | None = None) -> str:
+
+        temp = temperature if temperature is not None else self.temperature
 
         print(f"[LLM CALL] Sending request to model: {self.model}")
 
@@ -57,7 +61,12 @@ class LLMClient:
         if is_local:
 
             print("[LLM CALL] Running in LOCAL mode...")
-            local_kwargs = {"model": self.model,"prompt": prompt,"temperature": 0.1}
+
+            local_kwargs = {"model": self.model,"prompt": prompt}
+
+            if temp is not None:
+               local_kwargs["temperature"] = temp
+
             if self.seed is not None:
                 local_kwargs["seed"] = self.seed
 
@@ -69,12 +78,16 @@ class LLMClient:
         else:
             print("[LLM CALL] Running in API mode...")
 
-            resp = self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                seed=self.seed,
-            )
+            kwargs = {"model": self.model,"messages": [{"role": "user", "content": prompt}]}
+            
+            if temp is not None:
+              kwargs["temperature"] = temp
 
+            if self.seed is not None:
+                kwargs["seed"] = self.seed
+
+            resp = self.client.chat.completions.create(**kwargs)
+            
             content = resp.choices[0].message.content
             text = (
                 content.strip()
