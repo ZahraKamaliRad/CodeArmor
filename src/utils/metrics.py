@@ -165,6 +165,9 @@ def format_metrics_text(jsonl_path: str, run_info: dict | None = None) -> str:
         if model is not None:
             lines.append(f"model:              {model}")
 
+        retrieval_strategy = run_info.get("retrieval_strategy")
+        if retrieval_strategy is not None:
+            lines.append(f"retrieval_strategy: {retrieval_strategy}")
         prompt_tokens = run_info.get("prompt_tokens")
         completion_tokens = run_info.get("completion_tokens")
         total_tokens = run_info.get("total_tokens")
@@ -187,7 +190,6 @@ def format_metrics_text(jsonl_path: str, run_info: dict | None = None) -> str:
         lines.append("")
 
     lines.append("=== Security Metrics (Rate & Density) ===")
-    lines.append(f"dataset:           {r['dataset']}")
     lines.append("")
 
     for label, key in (("Bandit", "bandit"), ("Semgrep", "semgrep")):
