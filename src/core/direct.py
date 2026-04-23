@@ -56,7 +56,9 @@ def GenerateCode(records, dataset: str, technique: str, limit: int | None = None
             raw_resp = None
             for attempt in range(3):
                 try:
+                    #print(f"[DEBUG prompt]\n{prompt}\n[END DEBUG prompt]")
                     raw_resp = llm.generate_text(prompt_llm).strip()
+                    #print(f"[DEBUG raw_resp]\n{raw_resp}\n[END DEBUG]")
                     break
                 except Exception as e:
                     msg = str(e)
