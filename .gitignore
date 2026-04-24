@@ -217,6 +217,8 @@ __marimo__/
 
 # Project secrets & local config
 api_key.txt
+api_key_local.txt
+local_api_key.txt
 
 # Generated LLM outputs (artifacts)
 outputs/**
