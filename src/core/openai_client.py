@@ -86,6 +86,7 @@ class LLMClient:
 
             if self.seed is not None:
                 kwargs["seed"] = self.seed
+                kwargs["max_tokens"] = 8192
 
             resp = self.client.chat.completions.create(**kwargs)
             
