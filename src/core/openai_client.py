@@ -75,6 +75,7 @@ class LLMClient:
 
             resp = self.client.completions.create(**local_kwargs)
 
+            text = (resp.choices[0].text or "").strip()
         else:
             print("[LLM CALL] Running in API mode...")
 
