@@ -68,7 +68,7 @@ class LLMClient:
             if self.seed is not None:
                 options["seed"] = self.seed
                 options["temperature"] = 0  # Required for deterministic output
-                options["num_predict"] = 512  # Required for seed to work
+                options["num_predict"] = 8192  # Required for seed to work
             
             if options:
                 local_kwargs["extra_body"] = {"options": options}
