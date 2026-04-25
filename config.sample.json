@@ -1,0 +1,22 @@
+{
+  "llm": {
+    "provider": "api",
+    "profiles": {
+      "api": {
+        "api_url": "https://api.gapgpt.app/v1",
+        "api_key_path": "api_key.txt",
+        "model": "Qwen3-30B-A3B-70w4t",
+        "timeout": 120,
+        "seed": 1234
+      },
+
+      "local": {
+        "api_url": "http://127.0.0.1:11434/v1",
+        "api_key_path": "api_key_local.txt",
+        "model": "llama3.1:8b",
+        "timeout": 120,
+        "seed": 1234
+      }
+    }
+  }
+}
