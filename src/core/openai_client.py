@@ -49,8 +49,7 @@ class LLMClient:
         if base_url:
             print(f"[LLM INIT] Base URL: {base_url}")
 
-    def generate_text(self,prompt: str,track_tokens: bool = True,
-    log_file: str | None = None,extra_token_meta: dict | None = None,temperature: float | None = None) -> str:
+    def generate_text(self, prompt: str, track_tokens: bool = True, log_file: str | None = None, extra_token_meta: dict | None = None, temperature: float | None = None) -> str:
 
         temp = temperature if temperature is not None else self.temperature
 
@@ -59,32 +58,35 @@ class LLMClient:
         is_local = self.provider == "local"
 
         if is_local:
-
             print("[LLM CALL] Running in LOCAL mode...")
 
-            local_kwargs = {"model": self.model,"prompt": prompt}
+            local_kwargs = {"model": self.model, "prompt": prompt}
 
+            options = {}
             if temp is not None:
-               local_kwargs["temperature"] = temp
-
+                options["temperature"] = temp
             if self.seed is not None:
-                local_kwargs["seed"] = self.seed
+                options["seed"] = self.seed
+                options["temperature"] = 0  # Required for deterministic output
+                options["num_predict"] = 8192  # Required for seed to work
+            
+            if options:
+                local_kwargs["extra_body"] = {"options": options}
 
             resp = self.client.completions.create(**local_kwargs)
 
-
             text = (resp.choices[0].text or "").strip()
-
         else:
             print("[LLM CALL] Running in API mode...")
 
-            kwargs = {"model": self.model,"messages": [{"role": "user", "content": prompt}]}
+            kwargs = {"model": self.model, "messages": [{"role": "user", "content": prompt}]}
             
             if temp is not None:
-              kwargs["temperature"] = temp
+                kwargs["temperature"] = temp
 
             if self.seed is not None:
                 kwargs["seed"] = self.seed
+                kwargs["max_tokens"] = 8192
 
             resp = self.client.chat.completions.create(**kwargs)
             
