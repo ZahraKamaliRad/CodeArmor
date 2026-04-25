@@ -58,6 +58,7 @@ class LLMClient:
                 return fn()
 
             except (APITimeoutError, APIConnectionError, RateLimitError):
+                print(f"[LLM RETRY] {type(e).__name__} - retry {attempt+1}/{retries} in {wait}s")
                 wait = base_delay * (2 ** attempt)
                 time.sleep(wait)
                 continue
@@ -65,6 +66,7 @@ class LLMClient:
             except APIStatusError as e:
                 status = e.status_code
                 if e.status_code in (500, 502, 503, 504):
+                    print(f"[LLM RETRY] HTTP {status} - retry {attempt+1}/{retries} in {wait}s")
                     wait = base_delay * (2 ** attempt)
                     time.sleep(wait)
                     continue
@@ -72,6 +74,7 @@ class LLMClient:
                 if status == 401:
                     if attempt == 0:
                         wait = base_delay
+                        print(f"[LLM RETRY] HTTP 401 - retry in {wait}s")
                         time.sleep(wait)
                         continue
                     raise
@@ -141,5 +144,5 @@ class LLMClient:
                 log_file=log_file,
                 extra=extra_token_meta
             )
-
+        time.sleep(0.3)
         return text
