@@ -86,6 +86,7 @@ def GenerateCode(records, dataset: str, technique: str, limit: int | None = None
             else:
                 raw_resp = strip_markdown_fences(raw_resp)
                 tmpname = Path(str(task_id or "snippet")).stem
+                print(f"[analysis] Starting security analysis for task {task_id}")
                 scan = analyze_code_split(raw_resp, lang, tmpname=tmpname)
 
                 bandit_block = scan.get("bandit_result") or {}

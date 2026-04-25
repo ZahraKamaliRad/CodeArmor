@@ -5,9 +5,22 @@ import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
+from dotenv import load_dotenv
+import os 
+
+
 
 ENABLE_SEMGREP = True
 Issue = Dict[str, Any]
+
+load_dotenv()
+
+rules_path = os.getenv("SEMGREP_RULES_PATH")
+
+if not rules_path:
+    raise RuntimeError("SEMGREP_RULES_PATH is not set in environment.")
+
+SEMGREP_RULES = Path(rules_path)
 
 def which_or_raise(cmd: str) -> str:
     if shutil.which(cmd) is None:
@@ -112,38 +125,46 @@ def semgrep_extract_cwe(meta: Dict[str, Any]) -> Optional[Union[str, List[Any]]]
         return cwe.strip()
     return None
 
+
 def run_semgrep(fpath: Path) -> List[Issue]:
     which_or_raise("semgrep")
-    p = subprocess.run(
-        ["semgrep", "--json", "--quiet", str(fpath)],capture_output=True,text=True)
+
+    cmd = ["semgrep", "scan","--quiet","--metrics=off","--config", str(SEMGREP_RULES),
+    "--json","--include", fpath.name,str(fpath.parent)]
+    
+    p = subprocess.run(cmd, capture_output=True, text=True, errors="ignore")
+
+    if p.returncode not in (0, 1):
+        return []
+
     out = (p.stdout or "").strip()
     if not out:
         return []
-    try:
-        data = json.loads(out)
-    except Exception:
+
+    json_start = out.find("{")
+    if json_start == -1:
         return []
-    issues: List[Issue] = []
+
+    try:
+        data = json.loads(out[json_start:])
+    except:
+        return []
+
+    issues = []
     for r in data.get("results") or []:
         extra = r.get("extra") or {}
         meta = extra.get("metadata") or {}
-        cwe_raw = semgrep_extract_cwe(meta)
-        sev = extra.get("severity") or meta.get("severity")
-        msg = extra.get("message") or r.get("message") or ""
-        start = r.get("start") or {}
-        line = int(start.get("line") or 0)
-        issues.append(
-            {
-                "tool": "semgrep",
-                "rule_id": r.get("check_id"),
-                "cwe": cwe_raw,
-                "severity": normalize_severity(sev),
-                "message": msg,
-                "line": line
-            }
-        )
-    return issues
 
+        issues.append({
+            "tool": "semgrep",
+            "rule_id": r.get("check_id"),
+            "cwe": semgrep_extract_cwe(meta),
+            "severity": normalize_severity(extra.get("severity") or meta.get("severity")),
+            "message": extra.get("message") or "",
+            "line": int((r.get("start") or {}).get("line") or 0)
+        })
+
+    return issues
 
 def analyze_code(code: str,language: str,tools: Optional[List[str]] = None,
     tmpname: str = "snippet",) -> Tuple[List[Issue], int, Dict[str, Any]]:
@@ -161,12 +182,24 @@ def analyze_code(code: str,language: str,tools: Optional[List[str]] = None,
         all_issues: List[Issue] = []
 
         for tool in selected:
-            if tool == "bandit":
-                issues = run_bandit(fpath)
-            elif tool == "semgrep":
-                issues = run_semgrep(fpath)
-            else:
-                raise ValueError(f"Unknown tool: {tool}")
+
+            print(f"[analysis] Running {tool} on {stable_filename} ...")
+
+            try:
+                if tool == "bandit":
+                    issues = run_bandit(fpath)
+
+                elif tool == "semgrep":
+                    issues = run_semgrep(fpath)
+
+                else:
+                    raise ValueError(f"Unknown tool: {tool}")
+
+                print(f"[analysis] {tool} analysis SUCCESS - issues found: {len(issues)}")
+
+            except Exception as e:
+                print(f"[analysis] {tool} analysis FAILED: {e}")
+                issues = []
 
             for iss in issues:
                 iss["filename"] = stable_filename
