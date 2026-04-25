@@ -217,7 +217,7 @@ __marimo__/
 
 # Project secrets & local config
 api_key.txt
-arvan_api_key.txt
+api_key_local.txt
 
 # Generated LLM outputs (artifacts)
 outputs/**
