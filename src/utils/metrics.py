@@ -114,6 +114,9 @@ def read_records(jsonl_path: str) -> List[Dict[str, Any]]:
 def compute_metrics_for_tool(records: List[Dict[str, Any]], tool_key: str) -> Dict[str, Any]:
     per_item: List[Dict[str, Any]] = []
     for rec in records:
+        code_blob = first_present(rec, CODE_KEYS)
+        if not code_blob or not isinstance(code_blob, str) or not code_blob.strip(): 
+            continue
         secure, issues = secure_issues_from_tool(rec, tool_key)
         loc = loc_from(rec)
         per_item.append({"secure": bool(secure), "issue_count": int(len(issues)), "loc": int(loc)})

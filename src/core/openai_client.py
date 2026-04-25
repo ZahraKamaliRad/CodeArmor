@@ -3,6 +3,8 @@ import time
 from openai import (OpenAI,APITimeoutError,APIConnectionError,APIStatusError,RateLimitError,AuthenticationError)
 from src.config_loader import load_config, load_api_key
 from src.utils.tokens import add_token_usage
+import random
+
 
 
 def sanitize_model_name(name: str) -> str:
@@ -52,32 +54,30 @@ class LLMClient:
 
         self.client = OpenAI(**client_kwargs)
 
-    def _call_with_retry(self, fn, retries=3, base_delay=2):
+    def _call_with_retry(self, fn, retries=4, base_delay=2):
         for attempt in range(retries + 1):
             try:
                 return fn()
 
-            except (APITimeoutError, APIConnectionError, RateLimitError):
-                print(f"[LLM RETRY] {type(e).__name__} - retry {attempt+1}/{retries} in {wait}s")
+            except (APITimeoutError, APIConnectionError, RateLimitError) as e:
                 wait = base_delay * (2 ** attempt)
+                print(f"[LLM RETRY] {type(e).__name__} - retry {attempt+1}/{retries} in {wait}s")
                 time.sleep(wait)
                 continue
 
             except APIStatusError as e:
                 status = e.status_code
                 if e.status_code in (500, 502, 503, 504):
-                    print(f"[LLM RETRY] HTTP {status} - retry {attempt+1}/{retries} in {wait}s")
                     wait = base_delay * (2 ** attempt)
+                    print(f"[LLM RETRY] HTTP {status} - retry {attempt+1}/{retries} in {wait}s")
                     time.sleep(wait)
                     continue
 
                 if status == 401:
-                    if attempt == 0:
-                        wait = base_delay
-                        print(f"[LLM RETRY] HTTP 401 - retry in {wait}s")
-                        time.sleep(wait)
-                        continue
-                    raise
+                    wait = base_delay * (2 ** attempt) + random.uniform(0, 1)                    
+                    print(f"[LLM RETRY] 401 (likely rate limit) - retry {attempt+1}/{retries} in {wait}s")
+                    time.sleep(wait)
+                    continue
                 raise
             except AuthenticationError:
                 raise
@@ -144,5 +144,6 @@ class LLMClient:
                 log_file=log_file,
                 extra=extra_token_meta
             )
-        time.sleep(0.3)
+
+        time.sleep(0.5 + random.random() * 0.8)
         return text
