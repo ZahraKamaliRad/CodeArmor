@@ -217,8 +217,17 @@ __marimo__/
 
 # Project secrets & local config
 api_key.txt
+arvan_api_key.txt
 
 # Generated LLM outputs (artifacts)
 outputs/**
 # Keep run metadata only
 !outputs/**/run_meta.json
+
+src/retrieval/build_retrieval_examples.py
+src/retrieval/retrieval_dataset_stats.py
+
+semgrep-rule/**
+
+__pycache__/**
+*.pyc

@@ -4,10 +4,9 @@
     "profiles": {
       "api": {
         "api_key_path": "api_key.txt",
-        "api_url": "https://api.gapgpt.app/v1",
+        "api_url":"https://api.gapgpt.app/v1",
         "model": "gpt-4o-mini",
-        "timeout": 60,
-        "seed": 1234
+        "timeout": 120
       },
 
       "local": {
@@ -15,7 +14,8 @@
         "api_key_path": "",
         "model": "codellama:7b",
         "timeout": 120,
-        "seed": 1234
+        "seed": 1234,
+        "temperature":0.1
       }
     }
   }
