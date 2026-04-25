@@ -1,7 +1,9 @@
 import re
-from openai import OpenAI
+import time
+from openai import (OpenAI,APITimeoutError,APIConnectionError,APIStatusError,RateLimitError,AuthenticationError)
 from src.config_loader import load_config, load_api_key
 from src.utils.tokens import add_token_usage
+
 
 def sanitize_model_name(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(name))
@@ -32,34 +34,62 @@ class LLMClient:
 
         if api_key_path:
             api_key = load_api_key(api_key_path)
+            if not api_key:
+                raise ValueError(f"[LLM ERROR] API key file is empty: {api_key_path}")
         else:
             api_key = None
 
+        if api_key is None and active_provider != "local":
+            raise RuntimeError(
+                f"[LLM ERROR] Missing API key for provider '{self.provider}'."
+            )
+
         client_kwargs = {"timeout": float(timeout)}
-        
-        if api_key is None:
-            api_key = "dummy"
         client_kwargs["api_key"] = api_key
 
         if base_url:
             client_kwargs["base_url"] = base_url
+
         self.client = OpenAI(**client_kwargs)
 
-        print(f"[LLM INIT] Provider: {self.provider} | Model: {self.model}")
-        if base_url:
-            print(f"[LLM INIT] Base URL: {base_url}")
+    def _call_with_retry(self, fn, retries=3, base_delay=2):
+        for attempt in range(retries + 1):
+            try:
+                return fn()
 
-    def generate_text(self, prompt: str, track_tokens: bool = True, log_file: str | None = None, extra_token_meta: dict | None = None, temperature: float | None = None) -> str:
+            except (APITimeoutError, APIConnectionError, RateLimitError):
+                wait = base_delay * (2 ** attempt)
+                time.sleep(wait)
+                continue
+
+            except APIStatusError as e:
+                status = e.status_code
+                if e.status_code in (500, 502, 503, 504):
+                    wait = base_delay * (2 ** attempt)
+                    time.sleep(wait)
+                    continue
+
+                if status == 401:
+                    if attempt == 0:
+                        wait = base_delay
+                        time.sleep(wait)
+                        continue
+                    raise
+                raise
+            except AuthenticationError:
+                raise
+
+        raise RuntimeError("Max retries exceeded.")
+
+    def generate_text(self,prompt: str,track_tokens: bool = True,log_file: str | None = None,
+        extra_token_meta: dict | None = None,temperature: float | None = None) -> str:
 
         temp = temperature if temperature is not None else self.temperature
-
-        print(f"[LLM CALL] Sending request to model: {self.model}")
-
         is_local = self.provider == "local"
+        print(f"[LLM CALL] Sending request to model: {self.model}")
 
         if is_local:
             print("[LLM CALL] Running in LOCAL mode...")
-
             local_kwargs = {"model": self.model, "prompt": prompt}
 
             options = {}
@@ -67,29 +97,34 @@ class LLMClient:
                 options["temperature"] = temp
             if self.seed is not None:
                 options["seed"] = self.seed
-                options["temperature"] = 0  # Required for deterministic output
-                options["num_predict"] = 8192  # Required for seed to work
-            
+                options["temperature"] = 0
+                options["num_predict"] = 8192
+
             if options:
                 local_kwargs["extra_body"] = {"options": options}
 
-            resp = self.client.completions.create(**local_kwargs)
+            resp = self._call_with_retry(
+                lambda: self.client.completions.create(**local_kwargs)
+            )
 
             text = (resp.choices[0].text or "").strip()
+
         else:
             print("[LLM CALL] Running in API mode...")
+            kwargs = {
+                "model": self.model,
+                "messages": [{"role": "user", "content": prompt}]
+            }
 
-            kwargs = {"model": self.model, "messages": [{"role": "user", "content": prompt}]}
-            
             if temp is not None:
                 kwargs["temperature"] = temp
-
             if self.seed is not None:
                 kwargs["seed"] = self.seed
-                kwargs["max_tokens"] = 8192
 
-            resp = self.client.chat.completions.create(**kwargs)
-            
+            resp = self._call_with_retry(
+                lambda: self.client.chat.completions.create(**kwargs)
+            )
+
             content = resp.choices[0].message.content
             text = (
                 content.strip()
@@ -98,7 +133,6 @@ class LLMClient:
             )
 
         print("[LLM CALL] Response received.")
-
         if track_tokens and getattr(resp, "usage", None) is not None:
             u = resp.usage
             add_token_usage(
