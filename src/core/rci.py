@@ -49,31 +49,39 @@ def generate_with_retry(llm: LLMClient, prompt: str, retries: int = 3):
 
 def run_two_analyzers(code: str, lang: str, tmpname: str = "snippet") -> dict:
     scan = analyze_code_split(code, lang, tmpname=tmpname) or {}
-    loc = int(scan.get("loc") or 0)
 
-    bandit_block = scan.get("bandit_result") or {}
-    semgrep_block = scan.get("semgrep_result") or {}
+    result = {}
+    result["loc"] = int(scan.get("loc") or 0)
 
-    bandit_issues = bandit_block.get("issues") or []
-    semgrep_issues = semgrep_block.get("issues") or []
+    bandit_secure = True
+    semgrep_secure = True
 
-    bandit_secure = bool(bandit_block.get("secure", len(bandit_issues) == 0))
-    semgrep_secure = bool(semgrep_block.get("secure", len(semgrep_issues) == 0))
+    if "bandit_result" in scan:
+        bandit_block = scan["bandit_result"]
+        bandit_issues = bandit_block.get("issues") or []
+        bandit_secure = bool(bandit_block.get("secure", len(bandit_issues) == 0))
 
-    return {
-        "loc": loc,
-        "bandit_result": {
+        result["bandit_result"] = {
             "secure": bandit_secure,
             "issues": bandit_issues,
             "summary": bandit_block.get("summary") or {},
-        },
-        "semgrep_result": {
+        }
+
+    if "semgrep_result" in scan:
+        semgrep_block = scan["semgrep_result"]
+        semgrep_issues = semgrep_block.get("issues") or []
+        semgrep_secure = bool(semgrep_block.get("secure", len(semgrep_issues) == 0))
+
+        result["semgrep_result"] = {
             "secure": semgrep_secure,
             "issues": semgrep_issues,
             "summary": semgrep_block.get("summary") or {},
-        },
-        "secure": bool(bandit_secure and semgrep_secure)
-    }
+        }
+
+    result["secure"] = bool(bandit_secure and semgrep_secure)
+
+    return result
+
 
 
 def log_two_lines(run_out_dir: str, task_id: str, iter_idx: int, lang: str, scan: dict):
@@ -135,10 +143,7 @@ def rci_gen_code(records, dataset: str, technique: str, limit: int | None = None
                     "final_code": "",
                     "error": "generation_failed",
                     "loc": 0,
-                    "secure": False,
-                    "bandit_result": {"secure": False, "issues": [], "summary": {}},
-                    "semgrep_result": {"secure": False, "issues": [], "summary": {}},
-                }
+                    "secure": False}
                 f.write(json.dumps(parsed, ensure_ascii=False) + "\n")
                 f.flush()
                 continue
@@ -149,17 +154,21 @@ def rci_gen_code(records, dataset: str, technique: str, limit: int | None = None
 
             scan0 = run_two_analyzers(initial_code, lang_key, tmpname=tmpname)
             log_two_lines(run_out_dir, str(task_id), 0, lang_key, scan0)
-            history.append(
-                {
-                    "round": 0,
-                    "review": None,
-                    "improved_code": initial_code,
-                    "loc": int(scan0.get("loc") or 0),
-                    "secure": bool(scan0.get("secure")),
-                    "bandit_result": scan0.get("bandit_result") or {"secure": False, "issues": [], "summary": {}},
-                    "semgrep_result": scan0.get("semgrep_result") or {"secure": False, "issues": [], "summary": {}},
-                }
-            )
+            entry = {
+                "round": 0,
+                "review": None,
+                "improved_code": initial_code,
+                "loc": int(scan0.get("loc") or 0),
+                "secure": bool(scan0.get("secure")),
+            }
+
+            if "bandit_result" in scan0:
+                entry["bandit_result"] = scan0["bandit_result"]
+
+            if "semgrep_result" in scan0:
+                entry["semgrep_result"] = scan0["semgrep_result"]
+
+            history.append(entry)
 
             for i in range(1, int(iterations) + 1):
                 if iterations > 1:
@@ -174,17 +183,22 @@ def rci_gen_code(records, dataset: str, technique: str, limit: int | None = None
                     s = len((scan_i.get("semgrep_result") or {}).get("issues") or [])
                     print(f"[RCI] bandit={b} semgrep={s}")
                     log_two_lines(run_out_dir, str(task_id), i, lang_key, scan_i)
-                    history.append(
-                        {
-                            "round": i,
-                            "review": None,
-                            "improved_code": current_code,
-                            "loc": int(scan_i.get("loc") or 0),
-                            "secure": bool(scan_i.get("secure")),
-                            "bandit_result": scan_i.get("bandit_result") or {"secure": False, "issues": [], "summary": {}},
-                            "semgrep_result": scan_i.get("semgrep_result") or {"secure": False, "issues": [], "summary": {}},
-                        }
-                    )
+                    entry = {
+                        "round": i,
+                        "review": critique,
+                        "improved_code": current_code,
+                        "loc": int(scan_i.get("loc") or 0),
+                        "secure": bool(scan_i.get("secure")),
+                    }
+
+                    if "bandit_result" in scan_i:
+                        entry["bandit_result"] = scan_i["bandit_result"]
+
+                    if "semgrep_result" in scan_i:
+                        entry["semgrep_result"] = scan_i["semgrep_result"]
+
+                    history.append(entry)
+
                     break
                 
                 print("[RCI] Review generated.")
@@ -196,43 +210,52 @@ def rci_gen_code(records, dataset: str, technique: str, limit: int | None = None
                     scan_i = run_two_analyzers(current_code, lang_key, tmpname=tmpname)
                     b = len((scan_i.get("bandit_result") or {}).get("issues") or [])
                     s = len((scan_i.get("semgrep_result") or {}).get("issues") or [])
-                    print(f"[RCI] bandit={b} semgrep={s}")
+                    #print(f"[RCI] bandit={b} semgrep={s}")
 
                     log_two_lines(run_out_dir, str(task_id), i, lang_key, scan_i)
-                    history.append(
-                        {
-                            "round": i,
-                            "review": critique,
-                            "improved_code": current_code,
-                            "loc": int(scan_i.get("loc") or 0),
-                            "secure": bool(scan_i.get("secure")),
-                            "bandit_result": scan_i.get("bandit_result") or {"secure": False, "issues": [], "summary": {}},
-                            "semgrep_result": scan_i.get("semgrep_result") or {"secure": False, "issues": [], "summary": {}},
-                        }
-                    )
+                    entry = {
+                        "round": i,
+                        "review": critique,
+                        "improved_code": current_code,
+                        "loc": int(scan_i.get("loc") or 0),
+                        "secure": bool(scan_i.get("secure")),
+                    }
+
+                    if "bandit_result" in scan_i:
+                        entry["bandit_result"] = scan_i["bandit_result"]
+
+                    if "semgrep_result" in scan_i:
+                        entry["semgrep_result"] = scan_i["semgrep_result"]
+
+                    history.append(entry)
+
                     break
 
                 improved_code = strip_markdown_fences(improved_raw)
                 scan_i = run_two_analyzers(improved_code, lang_key, tmpname=tmpname)
                 b = len((scan_i.get("bandit_result") or {}).get("issues") or [])
                 s = len((scan_i.get("semgrep_result") or {}).get("issues") or [])
-                print(f"[RCI] bandit={b} semgrep={s}")
+                #print(f"[RCI] bandit={b} semgrep={s}")
                 log_two_lines(run_out_dir, str(task_id), i, lang_key, scan_i)
-                history.append(
-                    {
-                        "round": i,
-                        "review": critique,
-                        "improved_code": improved_code,
-                        "loc": int(scan_i.get("loc") or 0),
-                        "secure": bool(scan_i.get("secure")),
-                        "bandit_result": scan_i.get("bandit_result") or {"secure": False, "issues": [], "summary": {}},
-                        "semgrep_result": scan_i.get("semgrep_result") or {"secure": False, "issues": [], "summary": {}},
-                    }
-                )
+                entry = {
+                    "round": i,
+                    "review": critique,
+                    "improved_code": improved_code,
+                    "loc": int(scan_i.get("loc") or 0),
+                    "secure": bool(scan_i.get("secure")),
+                }
+
+                if "bandit_result" in scan_i:
+                    entry["bandit_result"] = scan_i["bandit_result"]
+
+                if "semgrep_result" in scan_i:
+                    entry["semgrep_result"] = scan_i["semgrep_result"]
+
+                history.append(entry)
+
                 current_code = improved_code
-
-            final_scan = run_two_analyzers(current_code, lang_key, tmpname=f"{tmpname}_final")
-
+            
+            last_iter = history[-1]
             parsed = {
                 "task": task_id,
                 "intent": intent,
@@ -243,12 +266,15 @@ def rci_gen_code(records, dataset: str, technique: str, limit: int | None = None
                 "iterations": history,
                 "initial_code": initial_code,
                 "final_code": current_code,
-                "loc": int(final_scan.get("loc") or 0),
-                "secure": bool(final_scan.get("secure")),
-                "bandit_result": final_scan.get("bandit_result") or {"secure": False, "issues": [], "summary": {}},
-                "semgrep_result": final_scan.get("semgrep_result") or {"secure": False, "issues": [], "summary": {}},
+                "loc": int(last_iter.get("loc") or 0),
+                "secure": bool(last_iter.get("secure")),
             }
 
+            if "bandit_result" in last_iter:
+                parsed["bandit_result"] = last_iter["bandit_result"]
+
+            if "semgrep_result" in last_iter:
+                parsed["semgrep_result"] = last_iter["semgrep_result"]
             f.write(json.dumps(parsed, ensure_ascii=False) + "\n")
             f.flush()
 
