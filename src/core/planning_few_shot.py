@@ -147,32 +147,38 @@ def extract_plan(plan_resp: str) -> str:
 
 def run_two_analyzers(code: str, lang: str, tmpname: str = "snippet") -> Dict[str, Any]:
     scan = analyze_code_split(code, lang, tmpname=tmpname) or {}
-    loc = int(scan.get("loc") or 0)
 
-    bandit_block = scan.get("bandit_result") or {}
-    semgrep_block = scan.get("semgrep_result") or {}
+    result: Dict[str, Any] = {}
+    result["loc"] = int(scan.get("loc") or 0)
 
-    bandit_issues = bandit_block.get("issues") or []
-    semgrep_issues = semgrep_block.get("issues") or []
+    bandit_secure = True
+    semgrep_secure = True
 
-    bandit_secure = bool(bandit_block.get("secure", len(bandit_issues) == 0))
-    semgrep_secure = bool(semgrep_block.get("secure", len(semgrep_issues) == 0))
+    if "bandit_result" in scan:
+        bandit_block = scan["bandit_result"]
+        bandit_issues = bandit_block.get("issues") or []
+        bandit_secure = bool(bandit_block.get("secure", len(bandit_issues) == 0))
 
-    return {
-        "loc": loc,
-        "bandit_result": {
+        result["bandit_result"] = {
             "secure": bandit_secure,
             "issues": bandit_issues,
             "summary": bandit_block.get("summary") or {},
-        },
-        "semgrep_result": {
+        }
+
+    if "semgrep_result" in scan:
+        semgrep_block = scan["semgrep_result"]
+        semgrep_issues = semgrep_block.get("issues") or []
+        semgrep_secure = bool(semgrep_block.get("secure", len(semgrep_issues) == 0))
+
+        result["semgrep_result"] = {
             "secure": semgrep_secure,
             "issues": semgrep_issues,
             "summary": semgrep_block.get("summary") or {},
-        },
-        "secure_all": bool(bandit_secure and semgrep_secure)
-    }
+        }
 
+    result["secure_all"] = bool(bandit_secure and semgrep_secure)
+
+    return result
 
 def attempt_repair_loop(llm: Any,code: str,lang: str,task_name: str,iterations: int,
     run_out_dir: str) -> Tuple[str, Dict[str, Any]]:
@@ -183,10 +189,9 @@ def attempt_repair_loop(llm: Any,code: str,lang: str,task_name: str,iterations: 
         print(f"[repair] >>> Entering iteration {r+1}/{iterations}")
 
         pre = run_two_analyzers(current_code, lang, tmpname=f"{task_name}_iter{r}_pre")
-        b_issues = pre["bandit_result"]["issues"]
-        s_issues = pre["semgrep_result"]["issues"]
-
-        print(f"[repair] bandit={len(b_issues)} issues, semgrep={len(s_issues)} issues")
+        b_issues = (pre.get("bandit_result") or {}).get("issues") or []
+        s_issues = (pre.get("semgrep_result") or {}).get("issues") or []
+        #print(f"[repair] bandit={len(b_issues)} issues, semgrep={len(s_issues)} issues")
 
         if pre.get("secure_all", (len(b_issues) == 0 and len(s_issues) == 0)):
             print("[repair] No issues found — exiting repair loop.")
@@ -223,13 +228,18 @@ def attempt_repair_loop(llm: Any,code: str,lang: str,task_name: str,iterations: 
         post = run_two_analyzers(current_code, lang, tmpname=f"{task_name}_iter{r}_post")
 
         csv_log(run_out_dir=run_out_dir,task_id=f"{task_name}#bandit",
-            iter_idx=r + 1,language=lang,issues=post["bandit_result"]["issues"])
+            iter_idx=r + 1,language=lang,issues=(post.get("bandit_result") or {}).get("issues") or [])
         
         csv_log(run_out_dir=run_out_dir,task_id=f"{task_name}#semgrep",
-            iter_idx=r + 1,language=lang,issues=post["semgrep_result"]["issues"])
+            iter_idx=r + 1,language=lang,issues=(post.get("semgrep_result") or {}).get("issues") or [])
 
         if post.get("secure_all",
-            (len(post["bandit_result"]["issues"]) == 0 and len(post["semgrep_result"]["issues"]) == 0)):
+        (
+        len((post.get("bandit_result") or {}).get("issues") or []) == 0
+        and
+        len((post.get("semgrep_result") or {}).get("issues") or []) == 0
+        )
+        ):
             return current_code, post
 
     final_scan = run_two_analyzers(current_code, lang, tmpname=f"{task_name}_final")
@@ -349,14 +359,14 @@ def planning_few_code_gen(records,dataset: str,technique: str,limit: int | None 
                 task_id=f"{task_name}#bandit",
                 iter_idx=0,
                 language=lang_key,
-                issues=scan["bandit_result"]["issues"]
+                issues=(scan.get("bandit_result") or {}).get("issues") or []
             )
             csv_log(
                 run_out_dir=str(out_dir),
                 task_id=f"{task_name}#semgrep",
                 iter_idx=0,
                 language=lang_key,
-                issues=scan["semgrep_result"]["issues"]
+                issues=(scan.get("semgrep_result") or {}).get("issues") or []
             )
 
             if int(iterations) > 0 and not scan.get("secure_all", True):
@@ -389,14 +399,12 @@ def planning_few_code_gen(records,dataset: str,technique: str,limit: int | None 
 
 
 def build_record(task_name: str,intent_text: str,lang_key: str,framework,
-    technique: str,plan: str,code: str,scan: Dict[str, Any] | None = None,
-    error: str | None = None) -> Dict[str, Any]:
+    technique: str,plan: str,code: str,scan: Dict[str, Any] | None = None,error: str | None = None) -> Dict[str, Any]:
 
     scan = scan or {}
-    bandit_result = scan.get("bandit_result") or {}
-    semgrep_result = scan.get("semgrep_result") or {}
-    secure_all = bool(scan.get("secure_all", False))
+
     loc = int(scan.get("loc") or 0)
+    secure_all = bool(scan.get("secure_all", False))
 
     record: Dict[str, Any] = {
         "task": task_name,
@@ -406,20 +414,26 @@ def build_record(task_name: str,intent_text: str,lang_key: str,framework,
         "technique": technique,
         "plan": plan,
         "code": code,
-        "issues": {
-            "bandit": bandit_result.get("issues") or [],
-            "semgrep": semgrep_result.get("issues") or []
-        },
         "loc": loc,
         "secure": secure_all,
-        "bandit_result": bandit_result,
-        "semgrep_result": semgrep_result
+        "issues": {}
     }
+
+    if "bandit_result" in scan:
+        bandit_block = scan["bandit_result"]
+        record["bandit_result"] = bandit_block
+        record["issues"]["bandit"] = bandit_block.get("issues") or []
+
+    if "semgrep_result" in scan:
+        semgrep_block = scan["semgrep_result"]
+        record["semgrep_result"] = semgrep_block
+        record["issues"]["semgrep"] = semgrep_block.get("issues") or []
 
     if error:
         record["error"] = error
 
     return record
+
 
 
 def write_record(f, record: Dict[str, Any]) -> None:

@@ -115,11 +115,17 @@ def compute_metrics_for_tool(records: List[Dict[str, Any]], tool_key: str) -> Di
     per_item: List[Dict[str, Any]] = []
     for rec in records:
         code_blob = first_present(rec, CODE_KEYS)
-        if not code_blob or not isinstance(code_blob, str) or not code_blob.strip(): 
+        if not code_blob or not isinstance(code_blob, str) or not code_blob.strip():
             continue
+
         secure, issues = secure_issues_from_tool(rec, tool_key)
         loc = loc_from(rec)
-        per_item.append({"secure": bool(secure), "issue_count": int(len(issues)), "loc": int(loc)})
+
+        per_item.append({
+            "secure": bool(secure),
+            "issue_count": int(len(issues)),
+            "loc": int(loc)
+        })
 
     N = len(per_item)
     V = sum(x["issue_count"] for x in per_item)
@@ -143,14 +149,20 @@ def compute_metrics(jsonl_path: str) -> Dict[str, Any]:
     records = read_records(jsonl_path)
     path = Path(jsonl_path)
 
-    bandit = compute_metrics_for_tool(records, "bandit_result")
-    semgrep = compute_metrics_for_tool(records, "semgrep_result")
-
-    return {
-        "dataset": path.stem,
-        "bandit": bandit,
-        "semgrep": semgrep,
+    result: Dict[str, Any] = {
+        "dataset": path.stem
     }
+
+    has_bandit = any("bandit_result" in r for r in records)
+    has_semgrep = any("semgrep_result" in r for r in records)
+
+    if has_bandit:
+        result["bandit"] = compute_metrics_for_tool(records, "bandit_result")
+
+    if has_semgrep:
+        result["semgrep"] = compute_metrics_for_tool(records, "semgrep_result")
+
+    return result
 
 
 def format_metrics_text(jsonl_path: str, run_info: dict | None = None) -> str:
@@ -171,12 +183,15 @@ def format_metrics_text(jsonl_path: str, run_info: dict | None = None) -> str:
         retrieval_strategy = run_info.get("retrieval_strategy")
         if retrieval_strategy is not None:
             lines.append(f"retrieval_strategy: {retrieval_strategy}")
+
         prompt_tokens = run_info.get("prompt_tokens")
         completion_tokens = run_info.get("completion_tokens")
         total_tokens = run_info.get("total_tokens")
+
         if prompt_tokens is not None or completion_tokens is not None or total_tokens is not None:
             lines.append("")
             lines.append("=== Token Usage ===")
+
             if prompt_tokens is not None:
                 lines.append(f"prompt_tokens:      {prompt_tokens}")
             if completion_tokens is not None:
@@ -195,10 +210,23 @@ def format_metrics_text(jsonl_path: str, run_info: dict | None = None) -> str:
     lines.append("=== Security Metrics (Rate & Density) ===")
     lines.append("")
 
-    for label, key in (("Bandit", "bandit"), ("Semgrep", "semgrep")):
-        m = r[key]
+    if "bandit" in r:
+        m = r["bandit"]
         lines += [
-            f"--- {label} ---",
+            "--- Bandit ---",
+            f"items (N):         {m['items']}",
+            f"total issues (V):  {m['total_issues']}",
+            f"total LOC (L):     {m['total_loc']}",
+            "",
+            f"Vulnerability Rate = V/N = {m['vuln_rate_frac']} = {m['vuln_rate_value']}",
+            f"Vulnerability Density = V/L = {m['density_frac']} = {m['density_value']}",
+            "",
+        ]
+
+    if "semgrep" in r:
+        m = r["semgrep"]
+        lines += [
+            "--- Semgrep ---",
             f"items (N):         {m['items']}",
             f"total issues (V):  {m['total_issues']}",
             f"total LOC (L):     {m['total_loc']}",

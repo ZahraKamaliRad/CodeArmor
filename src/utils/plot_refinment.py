@@ -82,8 +82,8 @@ def totals_carry_forward(pivot: pd.DataFrame) -> pd.Series:
     return totals.sort_index().astype(int)
 
 
-def compute_totals_by_analyzer(csv_path: Path,analyzer: str,
-    df: pd.DataFrame | None = None,cumulative: bool = True) -> pd.Series:
+def compute_totals_by_analyzer(csv_path: Path,analyzer: str,df: pd.DataFrame | None = None,
+    cumulative: bool = True) -> pd.Series:
 
     if df is None:
         df = load_refinement_df(csv_path)
@@ -101,14 +101,19 @@ def compute_totals_by_analyzer(csv_path: Path,analyzer: str,
     return totals_carry_forward(pivot) if cumulative else totals_point_in_time(pivot)
 
 
-def plot_totals(csv_path: Path,out: Path | None = None,kind: str = "line",show: bool = True,df: pd.DataFrame | None = None,
-    verbose: bool = False,cumulative: bool = True) -> Path | None:
+def plot_totals(csv_path: Path,out: Path | None = None,kind: str = "line",
+    show: bool = True,df: pd.DataFrame | None = None,verbose: bool = False,
+    cumulative: bool = True,) -> Path | None:
 
     if df is None:
         df = load_refinement_df(csv_path)
 
-    bandit_totals = compute_totals_by_analyzer(csv_path, "bandit", df=df, cumulative=cumulative)
-    semgrep_totals = compute_totals_by_analyzer(csv_path, "semgrep", df=df, cumulative=cumulative)
+    bandit_totals = compute_totals_by_analyzer(
+        csv_path, "bandit", df=df, cumulative=cumulative
+    )
+    semgrep_totals = compute_totals_by_analyzer(
+        csv_path, "semgrep", df=df, cumulative=cumulative
+    )
 
     if bandit_totals.empty and semgrep_totals.empty:
         print("[warn] No data to plot.")
@@ -119,11 +124,21 @@ def plot_totals(csv_path: Path,out: Path | None = None,kind: str = "line",show: 
     if kind == "bar":
         kind = "line"
 
-    if not bandit_totals.empty:
-        plt.plot(list(bandit_totals.index),list(bandit_totals.values),marker="o",label="Bandit")
+    if not bandit_totals.empty and bandit_totals.sum() > 0:
+        plt.plot(
+            list(bandit_totals.index),
+            list(bandit_totals.values),
+            linewidth=2.5,
+            label="Bandit",
+        )
 
-    if not semgrep_totals.empty:
-        plt.plot(list(semgrep_totals.index),list(semgrep_totals.values),marker="s",label="Semgrep")
+    if not semgrep_totals.empty and semgrep_totals.sum() > 0:
+        plt.plot(
+            list(semgrep_totals.index),
+            list(semgrep_totals.values),
+            linewidth=2.5,
+            label="Semgrep",
+        )
 
     all_x = sorted(set(bandit_totals.index).union(set(semgrep_totals.index)))
     if all_x:
@@ -136,6 +151,7 @@ def plot_totals(csv_path: Path,out: Path | None = None,kind: str = "line",show: 
     step = 5
     ymax_rounded = ((int(ymax) + step - 1) // step) * step
     plt.yticks(range(0, ymax_rounded + step, step))
+
     plt.xlabel("Iterations")
     plt.ylabel("Total vulnerabilities")
     plt.grid(True, linestyle="--", alpha=0.4)
@@ -153,116 +169,3 @@ def plot_totals(csv_path: Path,out: Path | None = None,kind: str = "line",show: 
         else:
             plt.close()
         return None
-
-
-# def label_change(start: int, end: int) -> str:
-#     if start > 0 and end == 0:
-#         return "zero"
-#     if start > 0 and end > 0 and end < start:
-#         return "decreased"
-#     if start > 0 and end > 0 and end > start:
-#         return "increased"
-#     if start == 0 and end > 0:
-#         return "introduced"
-#     if start > 0 and end == start:
-#         return "unchanged"
-#     return "none"
-
-
-# def refinment_summary(csv_path: Path,metrics_txt: Path | None = None,df: pd.DataFrame | None = None,
-#     write: bool = True) -> dict:
-
-#     def write_empty_summary() -> dict:
-#         text = (
-#             "\n=== Refinement Summary (0 -> 0) ===\n"
-#             "zero --> 0\n"
-#             "decreased --> 0\n"
-#             "increased --> 0\n"
-#             "introduced --> 0\n"
-#             "unchanged --> 0\n"
-#         )
-#         if write and metrics_txt:
-#             metrics_txt.parent.mkdir(parents=True, exist_ok=True)
-#             with open(metrics_txt, "a", encoding="utf-8") as f:
-#                 f.write(text)
-#         return {
-#             "end_iter": 0,
-#             "buckets": {k: 0 for k in ["zero", "decreased", "increased", "introduced", "unchanged"]},
-#             "text": text
-#         }
-
-#     if df is None:
-#         if not Path(csv_path).exists():
-#             return write_empty_summary()
-#         df = load_refinement_df(csv_path)
-
-#     if df.empty:
-#         return write_empty_summary()
-#     def summary_from_sub(sub: pd.DataFrame) -> dict:
-#         pivot_all = counts_per_task_iter_df(sub)
-
-#         iters_present = []
-#         for c in pivot_all.columns:
-#             try:
-#                 iters_present.append(int(c))
-#             except Exception:
-#                 pass
-
-#         if 0 not in iters_present:
-#             raise ValueError("Expected baseline iter 0 is missing.")
-
-#         end_iter = max(iters_present)
-
-#         comp = pd.DataFrame(index=pivot_all.index)
-#         comp["start_iter"] = pivot_all.get(0, 0)
-#         comp["end_iter"] = pivot_all.get(end_iter, 0)
-#         comp = comp.fillna(0).astype(int)
-
-#         cats = comp.apply(lambda r: label_change(int(r["start_iter"]), int(r["end_iter"])), axis=1)
-#         order = ["zero", "decreased", "increased", "introduced", "unchanged"]
-#         vc = cats.value_counts().reindex(order, fill_value=0)
-
-#         return {
-#             "end_iter": int(end_iter),
-#             "buckets": {k: int(vc.get(k, 0)) for k in order}
-#         }
-
-#     out_obj: dict = {"analyzers": {}}
-
-#     for an in ["bandit", "semgrep"]:
-#         sub = df[df[ANALYZER_COL] == an]
-#         if sub.empty:
-#             out_obj["analyzers"][an] = {
-#                 "end_iter": 0,
-#                 "buckets": {k: 0 for k in ["zero", "decreased", "increased", "introduced", "unchanged"]}
-#             }
-#         else:
-#             out_obj["analyzers"][an] = summary_from_sub(sub)
-
-#     merged = df.copy()
-#     merged[ANALYZER_COL] = "all"
-#     out_obj["analyzers"]["all"] = summary_from_sub(merged) if not merged.empty else {
-#         "end_iter": 0,
-#         "buckets": {k: 0 for k in ["zero", "decreased", "increased", "introduced", "unchanged"]}
-#     }
-
-#     end_iter = out_obj["analyzers"]["all"]["end_iter"]
-#     lines = ["", f"=== Refinement Summary (0 -> {end_iter}) ==="]
-#     for key in ["bandit", "semgrep", "all"]:
-#         b = out_obj["analyzers"][key]["buckets"]
-#         lines.append(f"[{key}] zero --> {b['zero']}")
-#         lines.append(f"[{key}] decreased --> {b['decreased']}")
-#         lines.append(f"[{key}] increased --> {b['increased']}")
-#         lines.append(f"[{key}] introduced --> {b['introduced']}")
-#         lines.append(f"[{key}] unchanged --> {b['unchanged']}")
-#         lines.append("")
-
-#     text = "\n".join(lines)
-
-#     if write and metrics_txt:
-#         metrics_txt.parent.mkdir(parents=True, exist_ok=True)
-#         with open(metrics_txt, "a", encoding="utf-8") as f:
-#             f.write(text)
-
-#     out_obj["text"] = text
-#     return out_obj

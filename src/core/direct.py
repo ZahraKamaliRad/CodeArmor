@@ -99,17 +99,23 @@ def GenerateCode(records, dataset: str, technique: str, limit: int | None = None
                     "framework": t.get("framework"),
                     "code": raw_resp,
                     "loc": int(scan.get("loc") or 0),
-                    "bandit_result": {
+                }
+
+                if "bandit_result" in scan:
+                    bandit_block = scan["bandit_result"]
+                    parsed["bandit_result"] = {
                         "secure": bool(bandit_block.get("secure", len(bandit_block.get("issues") or []) == 0)),
                         "issues": bandit_block.get("issues") or [],
                         "summary": bandit_block.get("summary") or {}
-                    },
-                    "semgrep_result": {
+                    }
+
+                if "semgrep_result" in scan:
+                    semgrep_block = scan["semgrep_result"]
+                    parsed["semgrep_result"] = {
                         "secure": bool(semgrep_block.get("secure", len(semgrep_block.get("issues") or []) == 0)),
                         "issues": semgrep_block.get("issues") or [],
                         "summary": semgrep_block.get("summary") or {}
                     }
-                }
 
             f.write(json.dumps(parsed, ensure_ascii=False) + "\n")
             f.flush()

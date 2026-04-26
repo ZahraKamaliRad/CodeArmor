@@ -190,12 +190,8 @@ def run_semgrep(fpath: Path) -> List[Issue]:
 
 
 
-def analyze_code(
-    code: str,
-    language: str,
-    tools: Optional[List[str]] = None,
-    tmpname: str = "snippet"
-) -> Tuple[List[Issue], int, Dict[str, Any]]:
+def analyze_code(code: str,language: str,tools: Optional[List[str]] = None,
+    tmpname: str = "snippet") -> Tuple[List[Issue], int, Dict[str, Any]]:
 
     selected = [
         t.strip().lower()
