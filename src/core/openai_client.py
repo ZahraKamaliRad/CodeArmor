@@ -54,7 +54,7 @@ class LLMClient:
 
         self.client = OpenAI(**client_kwargs)
 
-    def _call_with_retry(self, fn, retries=4, base_delay=2):
+    def _call_with_retry(self, fn, retries=10, base_delay=2):
         for attempt in range(retries + 1):
             try:
                 return fn()
@@ -62,6 +62,7 @@ class LLMClient:
             except (APITimeoutError, APIConnectionError, RateLimitError) as e:
                 wait = base_delay * (2 ** attempt)
                 print(f"[LLM RETRY] {type(e).__name__} - retry {attempt+1}/{retries} in {wait}s")
+                print(e)
                 time.sleep(wait)
                 continue
 
@@ -70,12 +71,14 @@ class LLMClient:
                 if e.status_code in (500, 502, 503, 504):
                     wait = base_delay * (2 ** attempt)
                     print(f"[LLM RETRY] HTTP {status} - retry {attempt+1}/{retries} in {wait}s")
+                    print(e)
                     time.sleep(wait)
                     continue
 
                 if status == 401 or status == 429:
                     wait = base_delay * (2 ** attempt) + random.uniform(0, 1)                    
                     print(f"[LLM RETRY] {status} (likely rate limit) - retry {attempt+1}/{retries} in {wait}s")
+                    print(e)
                     time.sleep(wait)
                     continue
                 raise
