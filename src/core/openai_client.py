@@ -73,9 +73,9 @@ class LLMClient:
                     time.sleep(wait)
                     continue
 
-                if status == 401:
+                if status == 401 or status == 429:
                     wait = base_delay * (2 ** attempt) + random.uniform(0, 1)                    
-                    print(f"[LLM RETRY] 401 (likely rate limit) - retry {attempt+1}/{retries} in {wait}s")
+                    print(f"[LLM RETRY] {status} (likely rate limit) - retry {attempt+1}/{retries} in {wait}s")
                     time.sleep(wait)
                     continue
                 raise
