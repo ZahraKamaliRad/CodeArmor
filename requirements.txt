@@ -1,7 +1,9 @@
+python-dotenv
+numpy
 orjson
-tqdm
-rich
-openai
-bandit
-pandas 
+pandas
 matplotlib
+sentence-transformers
+scikit-learn
+bandit
+semgrep
