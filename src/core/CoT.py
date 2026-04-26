@@ -202,10 +202,13 @@ def cot_gen_code(records,dataset: str,technique: str,limit: int | None = None,ou
                     "framework": t.get("framework"),
                     "technique": technique,
                     "code": code_text,
-                    "loc": int(scan.get("loc") or 0),
-                    "bandit_result": scan.get("bandit_result") or {"secure": True, "issues": []},
-                    "semgrep_result": scan.get("semgrep_result") or {"secure": True, "issues": []}
+                    "loc": int(scan.get("loc") or 0)
                 }
+                if "bandit_result" in scan:
+                    parsed["bandit_result"] = scan["bandit_result"]
+
+                if "semgrep_result" in scan:
+                    parsed["semgrep_result"] = scan["semgrep_result"]
 
             f.write(json.dumps(parsed, ensure_ascii=False) + "\n")
             f.flush()

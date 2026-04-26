@@ -111,11 +111,7 @@ def build_parsed_result(task_id, intent, lang, framework, retrieval_mode,
             "semgrep_result": {"secure": False, "issues": []},
         }
 
-    get_scan = scan.get
-    bandit = get_scan("bandit_result")
-    semgrep = get_scan("semgrep_result")
-
-    return {
+    parsed = {
         "task": task_id,
         "intent": intent,
         "language": lang,
@@ -125,11 +121,16 @@ def build_parsed_result(task_id, intent, lang, framework, retrieval_mode,
         "retrieval_example_id": example["id"] if example else None,
         "retrieval_similarity": similarity_score,
         "code": code,
-        "loc": int(get_scan("loc") or 0),
-        "bandit_result": bandit,
-        "semgrep_result": semgrep
+        "loc": int(scan.get("loc") or 0)
     }
 
+    if "bandit_result" in scan:
+        parsed["bandit_result"] = scan["bandit_result"]
+
+    if "semgrep_result" in scan:
+        parsed["semgrep_result"] = scan["semgrep_result"]
+
+    return parsed
 
 def load_retrieval_dataset(path: Path) -> list[dict]:
     examples = []
