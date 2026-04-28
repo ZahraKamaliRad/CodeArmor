@@ -237,9 +237,9 @@ class SecurityMetricsConsolidator:
         if df.empty:
             return
         
-        # Extract iteration number for iterative methods
-        df['base_method'] = df['method'].str.replace(r'_iter\d+', '', regex=True)
-        df['iteration'] = df['method'].str.extract(r'_iter(\d+)').fillna(0).astype(int)
+        # Extract iteration number for iterative methods - FIXED REGEX
+        df['base_method'] = df['method'].str.replace(r'_iter\d+$', '', regex=True)
+        df['iteration'] = df['method'].str.extract(r'_iter(\d+)$').fillna(0).astype(int)
         
         # Filter iterative methods
         iterative_methods = df[df['iteration'] > 0]
@@ -266,58 +266,97 @@ class SecurityMetricsConsolidator:
         sns.set_style("whitegrid")
         plt.rcParams['figure.figsize'] = (12, 8)
         
-        # 1. Vulnerability Rate Comparison (Bandit vs Semgrep)
+        # 1. Vulnerability Rate Comparison (Bandit vs Semgrep) - WITH PLANNING HIGHLIGHTED
         if 'bandit_rate' in df.columns and 'semgrep_rate' in df.columns:
             fig, ax = plt.subplots(figsize=(14, 8))
             
             method_means = df.groupby('method')[['bandit_rate', 'semgrep_rate']].mean()
-            method_means.plot(kind='bar', ax=ax, color=['#FF6B6B', '#4ECDC4'])
+            
+            # Create color arrays for highlighting planning
+            colors_bandit = ['#FF6B6B' if method == 'planning' else '#D3D3D3' for method in method_means.index]
+            colors_semgrep = ['#4ECDC4' if method == 'planning' else '#A9A9A9' for method in method_means.index]
+            
+            x = range(len(method_means))
+            width = 0.35
+            
+            ax.bar([i - width/2 for i in x], method_means['bandit_rate'], width, 
+                   label='Bandit', color=colors_bandit)
+            ax.bar([i + width/2 for i in x], method_means['semgrep_rate'], width, 
+                   label='Semgrep', color=colors_semgrep)
             
             ax.set_title('Vulnerability Rate by Method (Bandit vs Semgrep)', fontsize=16, fontweight='bold')
             ax.set_xlabel('Method', fontsize=12)
             ax.set_ylabel('Vulnerability Rate', fontsize=12)
+            ax.set_xticks(x)
+            ax.set_xticklabels(method_means.index, rotation=45, ha='right')
             ax.legend(['Bandit', 'Semgrep'], fontsize=10)
             ax.grid(axis='y', alpha=0.3)
-            plt.xticks(rotation=45, ha='right')
             plt.tight_layout()
             plt.savefig(self.output_dir / 'vulnerability_rate_comparison.png', dpi=300)
             plt.close()
         
-        # 2. Vulnerability Density Comparison
+        # 2. Vulnerability Density Comparison - WITH PLANNING HIGHLIGHTED
         if 'bandit_density' in df.columns and 'semgrep_density' in df.columns:
             fig, ax = plt.subplots(figsize=(14, 8))
             
             method_means = df.groupby('method')[['bandit_density', 'semgrep_density']].mean()
-            method_means.plot(kind='bar', ax=ax, color=['#95E1D3', '#F38181'])
+            
+            # Create color arrays for highlighting planning
+            colors_bandit = ['#95E1D3' if method == 'planning' else '#D3D3D3' for method in method_means.index]
+            colors_semgrep = ['#F38181' if method == 'planning' else '#A9A9A9' for method in method_means.index]
+            
+            x = range(len(method_means))
+            width = 0.35
+            
+            ax.bar([i - width/2 for i in x], method_means['bandit_density'], width, 
+                   label='Bandit', color=colors_bandit)
+            ax.bar([i + width/2 for i in x], method_means['semgrep_density'], width, 
+                   label='Semgrep', color=colors_semgrep)
             
             ax.set_title('Vulnerability Density by Method (Bandit vs Semgrep)', fontsize=16, fontweight='bold')
             ax.set_xlabel('Method', fontsize=12)
             ax.set_ylabel('Vulnerability Density (issues/LOC)', fontsize=12)
+            ax.set_xticks(x)
+            ax.set_xticklabels(method_means.index, rotation=45, ha='right')
             ax.legend(['Bandit', 'Semgrep'], fontsize=10)
             ax.grid(axis='y', alpha=0.3)
-            plt.xticks(rotation=45, ha='right')
             plt.tight_layout()
             plt.savefig(self.output_dir / 'vulnerability_density_comparison.png', dpi=300)
             plt.close()
         
-        # 3. Combined Metrics Heatmap
-        if all(col in df.columns for col in ['bandit_rate', 'semgrep_rate', 'bandit_density', 'semgrep_density']):
+        # 3. Vulnerability Rate Heatmap (Separate)
+        if 'bandit_rate' in df.columns and 'semgrep_rate' in df.columns:
             fig, ax = plt.subplots(figsize=(12, 10))
             
-            heatmap_data = df.groupby('method')[['bandit_rate', 'semgrep_rate', 
-                                                  'bandit_density', 'semgrep_density']].mean()
+            heatmap_data = df.groupby('method')[['bandit_rate', 'semgrep_rate']].mean()
             
             sns.heatmap(heatmap_data.T, annot=True, fmt='.4f', cmap='YlOrRd', 
-                       ax=ax, cbar_kws={'label': 'Value'})
+                       ax=ax, cbar_kws={'label': 'Vulnerability Rate'})
             
-            ax.set_title('Security Metrics Heatmap by Method', fontsize=16, fontweight='bold')
+            ax.set_title('Vulnerability Rate Heatmap by Method', fontsize=16, fontweight='bold')
             ax.set_xlabel('Method', fontsize=12)
             ax.set_ylabel('Metric', fontsize=12)
             plt.tight_layout()
-            plt.savefig(self.output_dir / 'metrics_heatmap.png', dpi=300)
+            plt.savefig(self.output_dir / 'vulnerability_rate_heatmap.png', dpi=300)
             plt.close()
         
-        # 4. Token Usage Comparison
+        # 4. Vulnerability Density Heatmap (Separate)
+        if 'bandit_density' in df.columns and 'semgrep_density' in df.columns:
+            fig, ax = plt.subplots(figsize=(12, 10))
+            
+            heatmap_data = df.groupby('method')[['bandit_density', 'semgrep_density']].mean()
+            
+            sns.heatmap(heatmap_data.T, annot=True, fmt='.6f', cmap='YlOrRd', 
+                       ax=ax, cbar_kws={'label': 'Vulnerability Density'})
+            
+            ax.set_title('Vulnerability Density Heatmap by Method', fontsize=16, fontweight='bold')
+            ax.set_xlabel('Method', fontsize=12)
+            ax.set_ylabel('Metric', fontsize=12)
+            plt.tight_layout()
+            plt.savefig(self.output_dir / 'vulnerability_density_heatmap.png', dpi=300)
+            plt.close()
+        
+        # 5. Token Usage Comparison
         if 'total_tokens' in df.columns:
             fig, ax = plt.subplots(figsize=(14, 8))
             
@@ -332,7 +371,7 @@ class SecurityMetricsConsolidator:
             plt.savefig(self.output_dir / 'token_usage_comparison.png', dpi=300)
             plt.close()
         
-        # 5. Runtime Comparison
+        # 6. Runtime Comparison
         if 'runtime_seconds' in df.columns:
             fig, ax = plt.subplots(figsize=(14, 8))
             
@@ -347,9 +386,9 @@ class SecurityMetricsConsolidator:
             plt.savefig(self.output_dir / 'runtime_comparison.png', dpi=300)
             plt.close()
         
-        # 6. Iteration Effect Analysis
-        df['base_method'] = df['method'].str.replace(r'_iter\d+', '', regex=True)
-        df['iteration'] = df['method'].str.extract(r'_iter(\d+)').fillna(0).astype(int)
+        # 7. Iteration Effect Analysis - FIXED REGEX
+        df['base_method'] = df['method'].str.replace(r'_iter\d+$', '', regex=True)
+        df['iteration'] = df['method'].str.extract(r'_iter(\d+)$').fillna(0).astype(int)
         
         iterative_df = df[df['iteration'] > 0]
         
@@ -380,7 +419,7 @@ class SecurityMetricsConsolidator:
             plt.savefig(self.output_dir / 'iteration_effect_analysis.png', dpi=300)
             plt.close()
         
-        # 7. Box plots for variability analysis
+        # 8. Box plots for variability analysis
         if 'bandit_rate' in df.columns:
             fig, axes = plt.subplots(2, 1, figsize=(14, 12))
             
@@ -434,9 +473,9 @@ class SecurityMetricsConsolidator:
             detailed = detailed.sort_values(['method', 'run_number'])
             detailed.to_excel(writer, sheet_name='Per Run Details', index=False)
             
-            # Sheet 4: Iteration Analysis
-            df['base_method'] = df['method'].str.replace(r'_iter\d+', '', regex=True)
-            df['iteration'] = df['method'].str.extract(r'_iter(\d+)').fillna(0).astype(int)
+            # Sheet 4: Iteration Analysis - FIXED REGEX
+            df['base_method'] = df['method'].str.replace(r'_iter\d+$', '', regex=True)
+            df['iteration'] = df['method'].str.extract(r'_iter(\d+)$').fillna(0).astype(int)
             iterative_df = df[df['iteration'] > 0]
             
             if not iterative_df.empty:
