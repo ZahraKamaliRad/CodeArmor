@@ -221,6 +221,7 @@ api_key_local.txt
 
 # Generated LLM outputs (artifacts)
 outputs/**
+reports/**
 # Keep run metadata only
 !outputs/**/run_meta.json
 
