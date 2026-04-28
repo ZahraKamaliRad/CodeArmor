@@ -17,7 +17,7 @@ class SecurityMetricsConsolidator:
         
         self.data = []
         self.method_groups = defaultdict(list)
-        
+
     def parse_metrics_file(self, filepath: Path) -> Dict:
         """Parse a SALLM_metrics.txt file and extract metrics."""
         with open(filepath, 'r') as f:
@@ -59,8 +59,10 @@ class SecurityMetricsConsolidator:
             n_match = re.search(r'items \(N\):\s+(\d+)', bandit_text)
             v_match = re.search(r'total issues \(V\):\s+(\d+)', bandit_text)
             l_match = re.search(r'total LOC \(L\):\s+(\d+)', bandit_text)
-            rate_match = re.search(r'Vulnerability Rate.*?=\s+([\d.]+)', bandit_text)
-            density_match = re.search(r'Vulnerability Density.*?=\s+([\d.]+)', bandit_text)
+            
+            # Extract rate and density from the calculation lines
+            rate_match = re.search(r'Vulnerability Rate = V/N = \d+/\d+ = ([\d.]+)', bandit_text)
+            density_match = re.search(r'Vulnerability Density = V/L = \d+/\d+ = ([\d.]+)', bandit_text)
             
             if n_match:
                 metrics['bandit_items'] = int(n_match.group(1))
@@ -81,8 +83,10 @@ class SecurityMetricsConsolidator:
             n_match = re.search(r'items \(N\):\s+(\d+)', semgrep_text)
             v_match = re.search(r'total issues \(V\):\s+(\d+)', semgrep_text)
             l_match = re.search(r'total LOC \(L\):\s+(\d+)', semgrep_text)
-            rate_match = re.search(r'Vulnerability Rate.*?=\s+([\d.]+)', semgrep_text)
-            density_match = re.search(r'Vulnerability Density.*?=\s+([\d.]+)', semgrep_text)
+            
+            # Extract rate and density from the calculation lines
+            rate_match = re.search(r'Vulnerability Rate = V/N = \d+/\d+ = ([\d.]+)', semgrep_text)
+            density_match = re.search(r'Vulnerability Density = V/L = \d+/\d+ = ([\d.]+)', semgrep_text)
             
             if n_match:
                 metrics['semgrep_items'] = int(n_match.group(1))
@@ -94,17 +98,20 @@ class SecurityMetricsConsolidator:
                 metrics['semgrep_rate'] = float(rate_match.group(1))
             if density_match:
                 metrics['semgrep_density'] = float(density_match.group(1))
-        
+                        
         return metrics
-    
+
     def extract_method_info(self, method_dir_name: str) -> Tuple[str, int]:
         """Extract method name and run number from directory name."""
-        # Handle cases like 'direct(2)', 'rci_iter1', 'one_shot'
-        match = re.match(r'([a-z_]+)(?:\((\d+)\))?', method_dir_name)
-        if match:
-            method = match.group(1)
-            run_num = int(match.group(2)) if match.group(2) else 1
+        # Handle cases like 'direct(2)' - extract run number in parentheses
+        paren_match = re.search(r'\((\d+)\)$', method_dir_name)
+        if paren_match:
+            run_num = int(paren_match.group(1))
+            method = method_dir_name[:paren_match.start()]
             return method, run_num
+        
+        # For all other cases, keep the full name as the method
+        # This preserves rci_iter1, self_refine_iter2, etc.
         return method_dir_name, 1
     
     def collect_data(self):
