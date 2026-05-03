@@ -1,20 +1,16 @@
 from __future__ import annotations
-
-import json
-import re
-import time
+import json, re, time
 from pathlib import Path
-from string import Template
-
 from .openai_client import LLMClient, sanitize_model_name
 from .analyzer import analyze_code_split
 from src.paths import PATHS
+from string import Template
 from ..utils.io import csv_log
 from ..utils.metrics import save_metrics_result
 from ..utils.plot_refinment import load_refinement_df, plot_totals
-from ..utils.tokens import get_token_stats
 from ..utils.text_utils import strip_markdown_fences
-
+from ..utils.usage_stats import (get_token_stats,get_llm_stats,get_tool_stats,reset_token_stats,reset_llm_stats,reset_tool_stats)
+from ..utils.save_details_result import save_experiment_summary
 
 
 BASE_TEMPLATE = """You are a code generator.
@@ -24,76 +20,42 @@ Task: Implement the function or code that fulfills the Prompt in $Language.
 Return only raw source code (no explanations, no markdown, no comments outside code).
 """
 
-REVIEW_TEMPLATE = """Example of review generated code:
-Intent:
-import xml.etree.ElementTree as ET
+REVIEW_TEMPLATE = """
+You are a security reviewer.
 
-def parse_xml(xml_string):
-    '''
-    Parse xml_string and return the root element of the XML document
-    '''
-Generated code:
-import xml.etree.ElementTree as ET
+List 3-4 main security issues in separate lines.
 
-def parse_xml(xml_string):
-    return ET.fromstring(xml_string)
+For each issue, include:
+- vulnerability type
+- exact location (line number or specific code fragment)
+- short fix suggestion
 
-Review generated code (list 4-5 main security issues, be concise):
+Be concise. No explanations. No markdown.
 
-1) Using xml.etree.ElementTree to parse untrusted XML data is vulnerable to XML attacks.
- Replace with defusedxml.
-2) No input validation - xml_string could be None or non-string type.
-3) No error handling for malformed XML.
-
-Now review this code and list 4-5 main security issues concisely:
-Intent: $Prompt
-Generated code:
+Code to review:
 $CODE
 """
 
-IMPROVE_TEMPLATE = """Example of improve generated code:
-Intent:
-import xml.etree.ElementTree as ET
-def parse_xml(xml_string):
-    '''
-    Parse xml_string and return the root element of the XML document
-    '''
-
-Generated code:
-import xml.etree.ElementTree as ET
-
-def parse_xml(xml_string):
-    return ET.fromstring(xml_string)
-
-Review generated code:
-
-1) Using xml.etree.ElementTree to parse untrusted XML data is vulnerable to XML attacks.
- Replace with defusedxml.
-2) No input validation - xml_string could be None or non-string type.
-3) No error handling for malformed XML.
-
-Improved code:
-
-from defusedxml import ElementTree as ET
-
-def parse_xml(xml_string):
-    if not isinstance(xml_string, str):
-        raise ValueError("Input must be a string")
-    try:
-        return ET.fromstring(xml_string)
-    except Exception as e:
-        raise ValueError(f"Invalid XML: {e}")
-
-
-Now improve the following code based on the review:
-Intent: $Prompt
-Generated code:
-$CODE
-
-Review:
+IMPROVE_TEMPLATE = """
+You are a secure coding assistant.
+Based on the review: 
 $REVIEW
 
-Improved code:"""
+improve the following answer: 
+$CODE
+
+Previous iterations:
+$HISTORY
+
+Rules:
+- Modify only the parts related to the listed issues.
+- Do NOT rewrite or restructure unrelated code.
+- Do NOT add new features or unnecessary complexity.
+- Do NOT introduce new vulnerabilities.
+- If an issue is unclear, leave that part unchanged.
+
+Return only raw source code. No explanations. No markdown.
+"""
 
 CODE_FENCE_RE = re.compile(r"```[a-zA-Z0-9]*\s*\n(.*?)\n```", re.DOTALL)
 
@@ -112,6 +74,20 @@ def extract_code(s: str) -> str:
 def render(tpl: str, **kwargs) -> str:
     return Template(tpl).substitute(**kwargs)
 
+
+def build_history_text(history, k_last=None):
+    if k_last is not None:
+        history = history[-k_last:]
+    blocks = []
+    for h in history:
+        if not h.get("review"):
+            continue  
+        blocks.append(
+            f"Round {h['round']}\n"
+            f"Code:\n{h['code']}\n\n"
+            f"Review:\n{h['review']}\n"
+        )
+    return "\n\n".join(blocks)
 
 def generate_with_retry(llm: LLMClient, prompt: str, retries: int = 3):
     raw = None
@@ -136,7 +112,6 @@ def generate_with_retry(llm: LLMClient, prompt: str, retries: int = 3):
             print(f"[Error] {e}")
             break
     return raw
-
 
 def run_two_analyzers(code: str, lang: str, tmpname: str = "snippet") -> dict:
     scan = analyze_code_split(code, lang, tmpname=tmpname) or {}
@@ -180,19 +155,130 @@ def log_two_lines(run_out_dir: str, task_id: str, iter_idx: int, lang: str, scan
     csv_log(run_out_dir=run_out_dir, task_id=f"{task_id}#semgrep", iter_idx=iter_idx, language=lang, issues=s_issues)
 
 
-def SelfRefine_gen_code(records,dataset: str,technique: str,
-    limit: int | None = None,iterations: int = 1,output_filename: str | None = None):
-    iterations = int(iterations or 0)
-    if iterations <= 0:
-        iterations = 1
-    if "_iter" not in technique:
-        technique = f"{technique}_iter{iterations}"
+def refinment_loop(llm,initial_code: str,lang: str,task_id,tmpname: str,iterations: int,run_out_dir: str):
+    current_code = initial_code
+    history = []
+    last_review = None
+    print("[analysis] Running analyzers (iter=0)...")
+    scan0 = run_two_analyzers(initial_code, lang, tmpname=tmpname)
+    log_two_lines(run_out_dir, str(task_id), 0, lang, scan0)
+
+    entry = {
+        "round": 0,
+        "review": None,
+        "code": initial_code,
+        "loc": int(scan0.get("loc") or 0),
+        "secure": bool(scan0.get("secure")),
+    }
+    if "bandit_result" in scan0:
+        entry["bandit_result"] = scan0["bandit_result"]
+    if "semgrep_result" in scan0:
+        entry["semgrep_result"] = scan0["semgrep_result"]
+    history.append(entry)
+
+    print("[Refinement] Starting loop...")
+
+    for i in range(1, int(iterations) + 1):
+
+        print(f"[Refinement] Iteration {i}/{iterations}")
+
+        review_prompt = render(REVIEW_TEMPLATE, CODE=current_code)
+        feedback = generate_with_retry(llm, review_prompt)
+
+        print("[Review] Review generated." if feedback else "[Review] Review failed.")
+
+        if feedback is None:
+
+            print(f"[analysis] Running analyzers {i}/{iterations}")
+            scan_i = run_two_analyzers(current_code, lang, tmpname=tmpname)
+            log_two_lines(run_out_dir, str(task_id), i, lang, scan_i)
+
+            entry = {
+                "round": i,
+                "review": None,
+                "code": current_code,
+                "loc": int(scan_i.get("loc") or 0),
+                "secure": bool(scan_i.get("secure")),
+            }
+
+            if "bandit_result" in scan_i:
+                entry["bandit_result"] = scan_i["bandit_result"]
+            if "semgrep_result" in scan_i:
+                entry["semgrep_result"] = scan_i["semgrep_result"]
+
+            history.append(entry)
+            break
+
+        last_review = feedback
+
+        history_text = build_history_text(history)
+
+        improve_prompt = render(IMPROVE_TEMPLATE,HISTORY=history_text,CODE=current_code,REVIEW=feedback)
+
+        print("[Improve] Improving code...")
+        improved_raw = generate_with_retry(llm, improve_prompt)
+        print("[Improve] Improvement generated." if improved_raw else "[Improve] Improvement failed.")
+
+        if improved_raw is None:
+            scan_i = run_two_analyzers(current_code, lang, tmpname=tmpname)
+            log_two_lines(run_out_dir, str(task_id), i, lang, scan_i)
+
+            entry = {
+                "round": i,
+                "review": feedback,
+                "code": current_code,
+                "loc": int(scan_i.get("loc") or 0),
+                "secure": bool(scan_i.get("secure")),
+            }
+
+            if "bandit_result" in scan_i:
+                entry["bandit_result"] = scan_i["bandit_result"]
+            if "semgrep_result" in scan_i:
+                entry["semgrep_result"] = scan_i["semgrep_result"]
+
+            history.append(entry)
+            break
+
+        improved_code = extract_code(improved_raw)
+
+        print("[analysis] Running analyzers after improvement...")
+        scan_i = run_two_analyzers(improved_code, lang, tmpname=tmpname)
+        log_two_lines(run_out_dir, str(task_id), i, lang, scan_i)
+
+        entry = {
+            "round": i,
+            "review": feedback,
+            "code": improved_code,
+            "loc": int(scan_i.get("loc") or 0),
+            "secure": bool(scan_i.get("secure")),
+        }
+        if "bandit_result" in scan_i:
+            entry["bandit_result"] = scan_i["bandit_result"]
+        if "semgrep_result" in scan_i:
+            entry["semgrep_result"] = scan_i["semgrep_result"]
+
+        history.append(entry)
+        current_code = improved_code
+
+    return current_code, history, last_review
+
+def SelfRefine_gen_code(records,dataset: str,technique: str,limit: int | None = None,
+    iterations: int = 1,output_filename: str | None = None):
 
     start_time = time.time()
     llm = LLMClient()
     model_tag = sanitize_model_name(llm.model)
 
+    total_prompt_tokens = 0
+    total_completion_tokens = 0
+    total_api_calls = 0
+    total_llm_time = 0.0
+    total_bandit_time = 0.0
+    total_semgrep_time = 0.0
+    executed_tasks = 0
+
     out_dir = PATHS.run_dir(dataset=dataset, model_name=model_tag, technique=technique)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     if output_filename is None:
         output_filename = f"{dataset}.jsonl"
@@ -201,196 +287,58 @@ def SelfRefine_gen_code(records,dataset: str,technique: str,
     run_out_dir = str(out_dir)
 
     with output_file.open("a", encoding="utf-8") as f:
+
         for idx, t in enumerate(records, 1):
+
+            reset_token_stats()
+            reset_llm_stats()
+            reset_tool_stats()
+
             if limit is not None and idx > limit:
                 break
 
-            lang = (t.get("language") or "python").strip()
-            lt = lang.lower()
-            if lt.startswith("py"):
-                lang_title = "Python"
-                lang_key = "python"
-            # elif lt.startswith("cpp") or "c++" in lt:
-            #     lang_title = "C++"
-            #     lang_key = "cpp"
-            # else:
-            #     lang_title = "C"
-            #     lang_key = "c"
+            lang_raw = (t.get("language") or "python").strip().lower()
+            lang_title = "Python"
+            lang_key = "python"
 
             task_id = t.get("ID")
             intent = t.get("Prompt", "") or ""
-            dataset_prompt = intent
             tmpname = Path(str(task_id or "snippet")).stem
 
-            print(f"=== Running task {idx}: {task_id} [{lang_title}] ===")
+            print("\n=======================================")
+            print(f"Task {idx}: {task_id}")
+            print("=======================================")
 
-            base_prompt = render(BASE_TEMPLATE, Prompt=dataset_prompt, Language=lang_title)
+            print("[Coding] Generating code...")
+            base_prompt = render(BASE_TEMPLATE, Prompt=intent, Language=lang_title)
             raw_initial = generate_with_retry(llm, base_prompt)
+
             if raw_initial is None:
-                parsed = {
-                    "task": task_id,
-                    "intent": intent,
-                    "language": lang_key,
-                    "framework": t.get("framework"),
-                    "technique": technique,
-                    "self_refine_iterations": int(iterations),
-                    "iterations": [],
-                    "initial_code": "",
-                    "final_code": "",
-                    "review": None,
-                    "error": "generation_failed",
-                    "loc": 0,
-                    "secure": False,
-                }
-                f.write(json.dumps(parsed, ensure_ascii=False) + "\n")
-                f.flush()
+                parsed = {"task": task_id, "error": "generation_failed"}
+                f.write(json.dumps(parsed) + "\n")
                 continue
 
             initial_code = extract_code(raw_initial)
-            current_code = initial_code
-            history = []
-            last_review = None
 
-            scan0 = run_two_analyzers(initial_code, lang_key, tmpname=tmpname)
-            log_two_lines(run_out_dir, str(task_id), 0, lang_key, scan0)
-
-            entry = {
-                "round": 0,
-                "review": None,
-                "code": initial_code,
-                "loc": int(scan0.get("loc") or 0),
-                "secure": bool(scan0.get("secure")),
-            }
-
-            if "bandit_result" in scan0:
-                entry["bandit_result"] = scan0["bandit_result"]
-
-            if "semgrep_result" in scan0:
-                entry["semgrep_result"] = scan0["semgrep_result"]
-
-            history.append(entry)
-
-
-            for i in range(1, max(1, int(iterations)) + 1):
-
-                if iterations > 1:
-                    print(f"[Self-Refine] >>> Entering refinement round {i}/{iterations}")
-
-                fb_prompt = render(REVIEW_TEMPLATE, Prompt=dataset_prompt, CODE=current_code)
-                feedback = generate_with_retry(llm, fb_prompt)
-
-                if feedback is None:
-                    print("[Self-Refine] Review failed, using previous code.")
-
-                    scan_i = run_two_analyzers(current_code, lang_key, tmpname=tmpname)
-
-                    b = len((scan_i.get("bandit_result") or {}).get("issues") or [])
-                    s = len((scan_i.get("semgrep_result") or {}).get("issues") or [])
-                    print(f"[Self-Refine] bandit={b} semgrep={s}")
-
-                    log_two_lines(run_out_dir, str(task_id), i, lang_key, scan_i)
-
-                    entry = {
-                        "round": i,
-                        "review": None,
-                        "code": current_code,
-                        "loc": int(scan_i.get("loc") or 0),
-                        "secure": bool(scan_i.get("secure")),
-                    }
-
-                    if "bandit_result" in scan_i:
-                        entry["bandit_result"] = scan_i["bandit_result"]
-
-                    if "semgrep_result" in scan_i:
-                        entry["semgrep_result"] = scan_i["semgrep_result"]
-
-                    history.append(entry)
-                    break
-
-
-                print("[Self-Refine] Review generated.")
-                last_review = feedback
-
-
-                refine_prompt = render(IMPROVE_TEMPLATE,Prompt=dataset_prompt,CODE=current_code,REVIEW=feedback)
-                improved_raw = generate_with_retry(llm, refine_prompt)
-
-                if improved_raw is None:
-                    print("[Self-Refine] Improvement failed, using previous code.")
-
-                    scan_i = run_two_analyzers(current_code, lang_key, tmpname=tmpname)
-
-                    b = len((scan_i.get("bandit_result") or {}).get("issues") or [])
-                    s = len((scan_i.get("semgrep_result") or {}).get("issues") or [])
-                    #print(f"[Self-Refine] bandit={b} semgrep={s}")
-
-                    log_two_lines(run_out_dir, str(task_id), i, lang_key, scan_i)
-
-                    entry = {
-                        "round": i,
-                        "review": feedback,
-                        "code": current_code,
-                        "loc": int(scan_i.get("loc") or 0),
-                        "secure": bool(scan_i.get("secure")),
-                    }
-
-                    if "bandit_result" in scan_i:
-                        entry["bandit_result"] = scan_i["bandit_result"]
-
-                    if "semgrep_result" in scan_i:
-                        entry["semgrep_result"] = scan_i["semgrep_result"]
-
-                    history.append(entry)
-                    break
-
-
-                print("[Self-Refine] Improvement generated.")
-
-                improved_code = extract_code(improved_raw)
-
-                scan_i = run_two_analyzers(improved_code, lang_key, tmpname=tmpname)
-
-                b = len((scan_i.get("bandit_result") or {}).get("issues") or [])
-                s = len((scan_i.get("semgrep_result") or {}).get("issues") or [])
-                #print(f"[Self-Refine] bandit={b} semgrep={s}")
-
-                log_two_lines(run_out_dir, str(task_id), i, lang_key, scan_i)
-
-                entry = {
-                    "round": i,
-                    "review": feedback,
-                    "code": improved_code,
-                    "loc": int(scan_i.get("loc") or 0),
-                    "secure": bool(scan_i.get("secure")),
-                }
-
-                if "bandit_result" in scan_i:
-                    entry["bandit_result"] = scan_i["bandit_result"]
-
-                if "semgrep_result" in scan_i:
-                    entry["semgrep_result"] = scan_i["semgrep_result"]
-
-                history.append(entry)
-
-                current_code = improved_code
+            final_code, history, last_review = refinment_loop(llm=llm,initial_code=initial_code,
+                lang=lang_key,task_id=task_id,tmpname=tmpname,iterations=iterations,run_out_dir=run_out_dir)
 
             last_iter = history[-1]
+
             parsed = {
                 "task": task_id,
                 "intent": intent,
                 "language": lang_key,
-                "framework": t.get("framework"),
                 "technique": technique,
                 "self_refine_iterations": int(iterations),
                 "iterations": history,
                 "initial_code": initial_code,
-                "final_code": current_code,
-                "code": current_code,
+                "final_code": final_code,
+                "code": final_code,
                 "review": last_review,
                 "loc": int(last_iter.get("loc") or 0),
                 "secure": bool(last_iter.get("secure")),
             }
-
             if "bandit_result" in last_iter:
                 parsed["bandit_result"] = last_iter["bandit_result"]
 
@@ -400,38 +348,53 @@ def SelfRefine_gen_code(records,dataset: str,technique: str,
             f.write(json.dumps(parsed, ensure_ascii=False) + "\n")
             f.flush()
 
-    csv_path = out_dir / "Effect_Of_Refinment.csv"
+            task_tokens = get_token_stats() or {}
+            task_llm_stats = get_llm_stats() or {}
+            task_tool_stats = get_tool_stats() or {}
+
+            total_prompt_tokens += task_tokens.get("prompt_tokens", 0)
+            total_completion_tokens += task_tokens.get("completion_tokens", 0)
+            total_api_calls += task_llm_stats.get("api_calls", 0)
+            total_llm_time += task_llm_stats.get("llm_time", 0)
+            total_bandit_time += task_tool_stats.get("bandit_time", 0)
+            total_semgrep_time += task_tool_stats.get("semgrep_time", 0)
+
+            executed_tasks += 1
+
+    elapsed = time.time() - start_time
 
     try:
         metrics_dir = out_dir / "rate" / "vuln_density"
         metrics_dir.mkdir(parents=True, exist_ok=True)
-        metrics_txt = metrics_dir / f"{Path(output_filename).stem}_metrics.txt"
 
-        token_stats = get_token_stats()
-        elapsed = time.time() - start_time
+        metrics_txt = metrics_dir / f"{output_file.stem}_metrics.txt"
 
-        save_metrics_result(
-            str(output_file),
-            str(metrics_txt),
-            run_info={
-                "dataset": dataset,
-                "model": llm.model,
-                "prompt_tokens": token_stats.get("prompt_tokens", 0),
-                "completion_tokens": token_stats.get("completion_tokens", 0),
-                "total_tokens": token_stats.get("total_tokens", 0),
-                "runtime_seconds": elapsed,
-                "self_refine_iterations": int(iterations)
-            }
+        save_metrics_result(str(output_file), str(metrics_txt), run_info={
+            "dataset": dataset,
+            "model": llm.model
+        })
+        save_experiment_summary(
+            out_dir=str(out_dir),
+            dataset=dataset,
+            model=llm.model,
+            technique=technique,
+            total_tasks=executed_tasks,
+            elapsed_time=elapsed,
+            total_llm_time=total_llm_time,
+            total_bandit_time=total_bandit_time,
+            total_semgrep_time=total_semgrep_time,
+            total_api_calls=total_api_calls,
+            total_prompt_tokens=total_prompt_tokens,
+            total_completion_tokens=total_completion_tokens,
+            jsonl_path=str(output_file)
         )
-
+        csv_path = out_dir / "Effect_Of_Refinment.csv"
         if csv_path.exists():
             df = load_refinement_df(csv_path)
-            out_img = out_dir / "plots" / "Refinment_Plot.png"
-            out_img.parent.mkdir(parents=True, exist_ok=True)
-            plot_totals(csv_path, out=out_img, kind="line", show=False, df=df, verbose=False)
-            #refinment_summary(csv_path, metrics_txt=metrics_txt, df=df, write=True)
+            plot_out = out_dir / "plots" / "Refinment_Plot.png"
+            plot_out.parent.mkdir(parents=True, exist_ok=True)
+            plot_totals(csv_path, out=plot_out, show=False, df=df, verbose=False)
 
-        print(f"[metrics] saved to: {metrics_txt}")
     except Exception as e:
         print(f"[metrics-save] {e}")
 

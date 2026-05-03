@@ -8,9 +8,9 @@ from .openai_client import LLMClient, sanitize_model_name
 from src.paths import PATHS
 from ..utils.metrics import save_metrics_result
 from .analyzer import analyze_code_split
-from ..utils.tokens import get_token_stats
+from ..utils.usage_stats import (get_token_stats, get_llm_stats, get_tool_stats,reset_token_stats, reset_llm_stats, reset_tool_stats)
 from ..utils.text_utils import strip_markdown_fences
-
+from ..utils.save_details_result import save_experiment_summary
 
 
 PROMPT_TEMPLATE = """ You are a code generator and will be given:
@@ -51,7 +51,7 @@ Thinking step-by-step:
 <your security analysis here, NO code>
 
 The secure {Language} code is:
-<only the complete secure code here, NO explanations>
+<only the generated secure code here, NO explanations>
 
 Language: {Language}
 
@@ -61,17 +61,13 @@ Intent:
 Thinking step-by-step:
 """
 
+
 def extract_code(resp: str) -> str:
     if not isinstance(resp, str):
         return ""
 
     blocks = list(
-        re.finditer(
-            r"```(?:python|cpp|c|c\+\+)?\s*(.*?)```",
-            resp,
-            flags=re.DOTALL | re.IGNORECASE
-        )
-    )
+        re.finditer(r"```(?:python|py)?\s*(.*?)```",resp,flags=re.DOTALL | re.IGNORECASE))
     if blocks:
         return blocks[-1].group(1).strip()
 
@@ -90,26 +86,32 @@ def extract_thinking(resp: str) -> str:
     if not isinstance(resp, str):
         return ""
 
+    parts = re.split(r"The secure .*? code is:", resp, flags=re.IGNORECASE | re.DOTALL)
+    if not parts:
+        return ""
+
+    before = parts[0]
+
     m = re.search(
-        r"(?:Thinking step-by-step|Thinking|Reasoning)\s*[:\-]\s*(.*?)"
-        r"(?=\n\s*(?:The secure \w[\w\+]*\s+code is:|```|\Z))",resp,flags=re.DOTALL | re.IGNORECASE)
-    
-    if m:
-        return m.group(1).strip()
-    m = re.search(r"^(.*?)```", resp, flags=re.DOTALL)
-
-    if m:
-        text = m.group(1).strip()
-        if len(text) > 20:
-            return text
-
-    return ""
+        r"(Thinking step[- ]by[- ]step|Thinking|Reasoning)\s*[:\-]?\s*(.*)",before,flags=re.IGNORECASE | re.DOTALL)
+    if not m:
+        return before.strip()
+    return m.group(2).strip()
 
 
-def cot_gen_code(records,dataset: str,technique: str,limit: int | None = None,output_filename: str | None = None) -> str:
+def cot_gen_code(records, dataset: str, technique: str,limit: int | None = None,output_filename: str | None = None) -> str:
+
     start_time = time.time()
     llm = LLMClient()
     model_tag = sanitize_model_name(llm.model)
+
+    total_prompt_tokens = 0
+    total_completion_tokens = 0
+    total_api_calls = 0
+    total_llm_time = 0.0
+    total_bandit_time = 0.0
+    total_semgrep_time = 0.0
+    executed_tasks = 0
 
     out_dir = PATHS.run_dir(dataset=dataset, model_name=model_tag, technique=technique)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -123,20 +125,18 @@ def cot_gen_code(records,dataset: str,technique: str,limit: int | None = None,ou
         records = list(records)
 
     with output_file.open("a", encoding="utf-8") as f:
+
         for idx, t in enumerate(records, 1):
             if limit is not None and idx > limit:
                 break
 
+            reset_token_stats()
+            reset_llm_stats()
+            reset_tool_stats()
+
             raw_lang = (t.get("language") or "python").strip().lower()
-            if raw_lang.startswith("py"):
-                lang_title = "Python"
-                lang_key = "python"
-            # elif raw_lang.startswith("cpp") or "c++" in raw_lang:
-            #     lang_title = "C++"
-            #     lang_key = "cpp"
-            # else:
-            #     lang_title = "C"
-            #     lang_key = "c"
+            lang_title = "Python" if raw_lang.startswith("py") else "C"
+            lang_key = "python" if raw_lang.startswith("py") else "c"
 
             task_name = (
                 t.get("ID")
@@ -145,35 +145,31 @@ def cot_gen_code(records,dataset: str,technique: str,limit: int | None = None,ou
                 or t.get("file")
                 or f"task_{idx}"
             )
+
             intent_text = t.get("Prompt", "") or ""
             prompt = PROMPT_TEMPLATE.format(Prompt=intent_text, Language=lang_title)
 
-            print(f"=== Running task {idx}: {task_name} [{lang_title}] ===")
+            print("\n=======================================")
+            print(f"Task {idx}: {task_name}")
+            print("=======================================")
 
             raw_resp = None
             for attempt in range(3):
                 try:
-                    #print(f"[DEBUG prompt]\n{prompt}\n[END DEBUG prompt]")
+                    print(f"[Task {idx}] Generating code...")
                     raw_resp = llm.generate_text(prompt).strip()
-                    #print(f"[DEBUG raw_resp]\n{raw_resp}\n[END DEBUG]")
-
+                    print(f"[Task {idx}] Code generated.")
                     break
                 except Exception as e:
                     msg = str(e)
-                    if (
-                        "502" in msg
-                        or "Bad Gateway" in msg
-                        or "InternalServerError" in msg
-                        or "timeout" in msg
-                        or "overloaded" in msg
-                    ):
-                        wait = 2 ** attempt
-                        time.sleep(wait)
+                    if any(err in msg for err in ["502", "Bad Gateway", "InternalServerError", "timeout", "overloaded"]):
+                        time.sleep(2 ** attempt)
                         continue
                     print(f"[Error] {e}")
                     break
 
             if raw_resp is None:
+                print("[Error] Code generation failed after retries.")
                 parsed = {
                     "task": task_name,
                     "intent": intent_text,
@@ -187,6 +183,7 @@ def cot_gen_code(records,dataset: str,technique: str,limit: int | None = None,ou
                     "bandit_result": {"secure": False, "issues": []},
                     "semgrep_result": {"secure": False, "issues": []}
                 }
+
             else:
                 thinking = extract_thinking(raw_resp)
                 code_text = strip_markdown_fences(extract_code(raw_resp))
@@ -204,37 +201,67 @@ def cot_gen_code(records,dataset: str,technique: str,limit: int | None = None,ou
                     "code": code_text,
                     "loc": int(scan.get("loc") or 0)
                 }
-                if "bandit_result" in scan:
-                    parsed["bandit_result"] = scan["bandit_result"]
 
-                if "semgrep_result" in scan:
-                    parsed["semgrep_result"] = scan["semgrep_result"]
+                for tool in ["bandit_result", "semgrep_result"]:
+                    if tool in scan:
+                        block = scan[tool]
+                        parsed[tool] = {
+                            "secure": bool(block.get("secure", len(block.get("issues") or []) == 0)),
+                            "issues": block.get("issues") or [],
+                            "summary": block.get("summary") or {},
+                        }
+
+            task_tokens = get_token_stats()
+            task_llm_stats = get_llm_stats()
+            task_tool_stats = get_tool_stats()
+
+            total_prompt_tokens += task_tokens.get("prompt_tokens", 0)
+            total_completion_tokens += task_tokens.get("completion_tokens", 0)
+            total_api_calls += task_llm_stats.get("api_calls", 0)
+
+            total_llm_time += task_llm_stats.get("llm_time", 0)
+            total_bandit_time += task_tool_stats.get("bandit_time", 0)
+            total_semgrep_time += task_tool_stats.get("semgrep_time", 0)
 
             f.write(json.dumps(parsed, ensure_ascii=False) + "\n")
             f.flush()
+
+            executed_tasks += 1
+
+    elapsed = time.time() - start_time
 
     try:
         metrics_dir = out_dir / "rate" / "vuln_density"
         metrics_dir.mkdir(parents=True, exist_ok=True)
         metrics_txt = metrics_dir / f"{Path(output_filename).stem}_metrics.txt"
 
-        token_stats = get_token_stats()
-        elapsed = time.time() - start_time
-
         save_metrics_result(
             str(output_file),
             str(metrics_txt),
             run_info={
                 "dataset": dataset,
-                "model": llm.model,
-                "prompt_tokens": token_stats.get("prompt_tokens", 0),
-                "completion_tokens": token_stats.get("completion_tokens", 0),
-                "total_tokens": token_stats.get("total_tokens", 0),
-                "runtime_seconds": elapsed
+                "model": llm.model  
             }
         )
+
     except Exception as e:
         print(f"[metrics-save] {e}")
+
+    save_experiment_summary(
+        out_dir=str(out_dir),
+        dataset=dataset,
+        model=llm.model,
+        technique=technique,
+        total_tasks=executed_tasks,
+        elapsed_time=elapsed,
+        total_llm_time=total_llm_time,
+        total_bandit_time=total_bandit_time,
+        total_semgrep_time=total_semgrep_time,
+        total_api_calls=total_api_calls,
+        total_prompt_tokens=total_prompt_tokens,
+        total_completion_tokens=total_completion_tokens,
+        jsonl_path=str(output_file)
+    )
 
     print(f"Tasks completed. Results saved to {output_file}")
     return str(output_file)

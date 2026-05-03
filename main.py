@@ -11,9 +11,11 @@ from src.core.self_refine import SelfRefine_gen_code
 from src.core.one_shot import OneShot_gen_code
 from src.core.CoT import cot_gen_code
 from src.core.planning_few_shot import planning_few_code_gen
-from src.core.planning import planning_gen_code
 from src.core.persona import persona_gen_code
 from src.config_loader import override_config
+from src.core.planning_rci import planning_rci_gen_code
+
+
 
 def dataset_registered(name: str):
     module_map = {
@@ -88,15 +90,15 @@ def run_cot(dataset: str, file: str, limit: int):
     cot_gen_code(records, dataset, "cot", limit=limit, output_filename=out)
 
 
-def run_planning(dataset: str, file: str, limit: int, iterations: int):
-    records, out = load_records(dataset, file)
-    planning_gen_code(records, dataset, tech("planning", iterations),
-                      limit=limit, iterations=iterations, output_filename=out)
-
-
 def run_persona(dataset: str, file: str, limit: int):
     records, out = load_records(dataset, file)
     persona_gen_code(records, dataset, "persona", limit=limit, output_filename=out)
+    
+    
+def run_planning_rci(dataset: str, file: str, limit: int, iterations: int):
+    records, out = load_records(dataset, file)
+    planning_rci_gen_code(records, dataset, tech("planning_rci", iterations),
+                          limit=limit, iterations=iterations, output_filename=out)
 
 
 
@@ -108,8 +110,8 @@ dispatch = {
     "planning_few_shot": run_planning_few_shot,
     "one_shot": run_one_shot,
     "cot": run_cot,
-    "planning": run_planning,
     "persona": run_persona,
+    "planning_rci": run_planning_rci
 }
 
 

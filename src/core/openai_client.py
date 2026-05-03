@@ -2,10 +2,8 @@ import re
 import time
 from openai import (OpenAI,APITimeoutError,APIConnectionError,APIStatusError,RateLimitError,AuthenticationError)
 from src.config_loader import load_config, load_api_key
-from src.utils.tokens import add_token_usage
+from src.utils.usage_stats import add_token_usage,record_llm_time,increment_api_calls
 import random
-
-
 
 def sanitize_model_name(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(name))
@@ -57,8 +55,11 @@ class LLMClient:
     def _call_with_retry(self, fn, retries=10, base_delay=2):
         for attempt in range(retries + 1):
             try:
-                return fn()
-
+                increment_api_calls()
+                start_time = time.time()
+                resp = fn()
+                record_llm_time(time.time() - start_time)
+                return resp
             except (APITimeoutError, APIConnectionError, RateLimitError) as e:
                 wait = base_delay * (2 ** attempt)
                 print(f"[LLM RETRY] {type(e).__name__} - retry {attempt+1}/{retries} in {wait}s")

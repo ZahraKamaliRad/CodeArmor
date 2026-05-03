@@ -3,155 +3,55 @@ from pathlib import Path
 import json
 import re
 import time
-import random
 import numpy as np
-from dotenv import load_dotenv
 import os
+from dotenv import load_dotenv
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
-
 from .openai_client import LLMClient, sanitize_model_name
 from src.paths import PATHS
-from ..utils.metrics import save_metrics_result
 from .analyzer import analyze_code_split
-from ..utils.tokens import get_token_stats
 from ..utils.text_utils import strip_markdown_fences
-
-
+from ..utils.usage_stats import (get_token_stats, get_llm_stats, get_tool_stats,reset_token_stats, reset_llm_stats, reset_tool_stats)
+from ..utils.save_details_result import save_experiment_summary
+from ..utils.metrics import save_metrics_result
 
 load_dotenv()
-
 RETRIEVAL_DATASET_PATH = Path(os.getenv("RETRIEVAL_DATASET_PATH"))
 EMBEDDING_MODEL_PATH = os.getenv("EMBEDDING_MODEL_PATH")
 
 embedding_model = None
 retrieval_index = {}
+SIM_LOWER, SIM_UPPER = 0.30, 0.80
 
-
-ONE_SHOT_PROMPT_TEMPLATE = """You are a secure code generator.
-
-Below is an example of a security-related coding task and its secure implementation:
-
-### Example Task:
+ONE_SHOT_PROMPT_TEMPLATE = """Example Prompt:
 {Example_Prompt}
 
-### Example Secure Code:
+Reference Secure Code (CWE related):
 {Example_Secure_Code}
 
-Now complete the following task. Return only raw source code (no explanations, no markdown, no comments outside code).
-
-### Task:
-{Prompt}
-
+Now, please write the secure code for this task:
+Task: {Prompt}
 Language: {Language}
-"""
-
-ZERO_SHOT_PROMPT_TEMPLATE = """You are a secure code generator.
-
-Complete the following task. Return only raw source code (no explanations, no markdown, no comments outside code).
-
-### Task:
-{Prompt}
-
-Language: {Language}
+Code:
+Return only raw source code (no explanations, no markdown, no comments outside code).
 """
 
 
-def generate_with_retry(llm, prompt, retries=3):
-    for attempt in range(retries):
-        try:
-            return llm.generate_text(prompt).strip()
-        except Exception as e:
-            msg = str(e)
-            if "502" in msg or "Bad Gateway" in msg:
-                time.sleep(2 ** attempt)
-            else:
-                break
-    return None
+def extract_raw_code(resp: str) -> str:
+    
+    if not isinstance(resp, str):
+        return ""
 
+    resp = resp.strip()
+    if not resp:
+        return ""
 
-def build_prompt(example, intent, lang_title):
-    if example:
-        return (
-            ONE_SHOT_PROMPT_TEMPLATE.format(
-                Example_Prompt=example.get("prompt", ""),
-                Example_Secure_Code=example.get("secure_code", ""),
-                Prompt=intent,
-                Language=lang_title
-            ),
-            "one_shot"
-        )
+    m = re.search(r"```(?:[\w+-]*)\s*(.*?)```", resp, re.DOTALL)
+    if m:
+        return m.group(1).strip()
 
-    return (
-        ZERO_SHOT_PROMPT_TEMPLATE.format(
-            Prompt=intent,
-            Language=lang_title
-        ),
-        "zero_shot"
-    )
-
-
-def build_parsed_result(task_id, intent, lang, framework, retrieval_mode,
-                        retrieval_mode_label, example, similarity_score,
-                        code, scan=None):
-
-    if scan is None:
-        return {
-            "task": task_id,
-            "intent": intent,
-            "language": lang,
-            "framework": framework,
-            "retrieval_strategy": retrieval_mode,
-            "retrieval_mode": retrieval_mode_label,
-            "retrieval_example_id": example["id"] if example else None,
-            "retrieval_similarity": similarity_score,
-            "code": "",
-            "loc": 0,
-            "bandit_result": {"secure": False, "issues": []},
-            "semgrep_result": {"secure": False, "issues": []},
-        }
-
-    parsed = {
-        "task": task_id,
-        "intent": intent,
-        "language": lang,
-        "framework": framework,
-        "retrieval_strategy": retrieval_mode,
-        "retrieval_mode": retrieval_mode_label,
-        "retrieval_example_id": example["id"] if example else None,
-        "retrieval_similarity": similarity_score,
-        "code": code,
-        "loc": int(scan.get("loc") or 0)
-    }
-
-    if "bandit_result" in scan:
-        parsed["bandit_result"] = scan["bandit_result"]
-
-    if "semgrep_result" in scan:
-        parsed["semgrep_result"] = scan["semgrep_result"]
-
-    return parsed
-
-def load_retrieval_dataset(path: Path) -> list[dict]:
-    examples = []
-    if not path.exists():
-        return examples
-
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                try:
-                    examples.append(json.loads(line))
-                except json.JSONDecodeError:
-                    pass
-    return examples
-
-
-def extract_cwe(task_id: str) -> str | None:
-    match = re.search(r"cwe[-_]?(\d+)", task_id, re.IGNORECASE)
-    return match.group(1) if match else None
-
+    return strip_markdown_fences(resp).strip()
 
 def get_embedding_model():
     global embedding_model
@@ -159,6 +59,22 @@ def get_embedding_model():
         embedding_model = SentenceTransformer(EMBEDDING_MODEL_PATH)
     return embedding_model
 
+def load_retrieval_dataset(path: Path) -> list[dict]:
+    examples = []
+    if not path or not path.exists():
+        return examples
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            if line.strip():
+                try:
+                    examples.append(json.loads(line))
+                except Exception:
+                    pass
+    return examples
+
+def extract_cwe(task_id: str) -> str | None:
+    match = re.search(r"cwe[-_]?(\d+)", str(task_id), re.IGNORECASE)
+    return match.group(1) if match else None
 
 def build_retrieval_index(retrieval_data: list[dict]):
     global retrieval_index
@@ -167,194 +83,189 @@ def build_retrieval_index(retrieval_data: list[dict]):
 
     model = get_embedding_model()
     groups = {}
-    prompts = {}
-
     for ex in retrieval_data:
         cwe = ex.get("cwe")
-        if not cwe:
-            continue
-        groups.setdefault(cwe, []).append(ex)
-        prompts.setdefault(cwe, []).append(ex["prompt"])
+        if cwe:
+            groups.setdefault(cwe, []).append(ex)
 
-    for cwe, prompt_list in prompts.items():
-        embeddings = np.array(model.encode(prompt_list, normalize_embeddings=True))
-        retrieval_index[cwe] = {
-            "examples": groups[cwe],
-            "embeddings": embeddings
-        }
+    for cwe, items in groups.items():
+        prompts = [it["prompt"] for it in items]
+        embs = model.encode(prompts, normalize_embeddings=True)
+        retrieval_index[cwe] = {"examples": items, "embeddings": embs}
 
     return retrieval_index
 
-
-def random_example(retrieval_data: list[dict], cwe: str, exclude_id: str):
-    candidates = [
-        ex for ex in retrieval_data
-        if ex.get("cwe") == cwe and ex.get("id") != exclude_id
-    ]
-    return random.choice(candidates) if candidates else None
-
-
-def similar_example(cwe: str, query_prompt: str, exclude_id: str):
-    index = retrieval_index.get(cwe)
-    if not index:
-        return None, None
-
-    examples = index["examples"]
-    embeddings = index["embeddings"]
-
+def retrieval_example(query_prompt: str, target_cwe: str | None, exclude_id: str):
     model = get_embedding_model()
     query_emb = model.encode([query_prompt], normalize_embeddings=True)
 
-    sims = cosine_similarity(query_emb, embeddings)[0]
+    if target_cwe and target_cwe in retrieval_index:
+        idx_data = retrieval_index[target_cwe]
+        sims = cosine_similarity(query_emb, idx_data["embeddings"])[0]
+        valid_cwe_matches = [
+            (idx_data["examples"][i], float(s))
+            for i, s in enumerate(sims)
+            if idx_data["examples"][i]["id"] != exclude_id and SIM_LOWER < s < SIM_UPPER
+        ]
+        if valid_cwe_matches:
+            example, sim = min(valid_cwe_matches, key=lambda x: x[1])
+            return example, sim
 
-    best_idx = None
-    best_score = -1
+    all_ex, all_embs = [], []
+    for d in retrieval_index.values():
+        all_ex.extend(d["examples"])
+        all_embs.extend(d["embeddings"])
 
-    for i, sim in enumerate(sims):
-        if examples[i]["id"] == exclude_id:
-            continue
-        if sim > best_score:
-            best_score = float(sim)
-            best_idx = i
+    if all_embs:
+        sims_global = cosine_similarity(query_emb, np.array(all_embs))[0]
+        valid_global_matches = [
+            (all_ex[i], float(s))
+            for i, s in enumerate(sims_global)
+            if all_ex[i]["id"] != exclude_id and SIM_LOWER < s < SIM_UPPER
+        ]
+        if valid_global_matches:
+            example, sim = max(valid_global_matches, key=lambda x: x[1])
+            return example, sim
 
-    if best_idx is None:
-        return None, None
+    return None, None
 
-    return examples[best_idx], best_score
+def build_prompt(example, intent, lang_title):
+    return ONE_SHOT_PROMPT_TEMPLATE.format(Example_Prompt=example.get("prompt", ""),
+        Example_Secure_Code=example.get("secure_code", ""),Prompt=intent,Language=lang_title)
 
+def generate_with_retry(llm, prompt, retries=3):
+    for attempt in range(retries):
+        try:
+            return llm.generate_text(prompt).strip()
+        except Exception as e:
+            if "502" in str(e):
+                time.sleep(2 ** attempt)
+            else:
+                break
+    return None
 
-def OneShot_gen_code(records, dataset: str, technique: str, limit: int | None = None,
-                    retrieval_mode: str = "similarity"):
+def build_parsed_result(task_id, intent, lang, framework, example, similarity_score, code, scan=None):
+    res = {
+        "task": task_id,
+        "intent": intent,
+        "language": lang,
+        "framework": framework,
+        "retrieval_example_id": example["id"] if example else None,
+        "retrieval_similarity": similarity_score,
+        "retrieval_example_prompt": example.get("prompt") if example else None,
+        "code": code,
+        "loc": 0,
+        "bandit_result": {"secure": False, "issues": []},
+        "semgrep_result": {"secure": False, "issues": []},
+    }
 
+    if scan:
+        res["loc"] = int(scan.get("loc") or 0)
+        res["bandit_result"] = scan.get("bandit_result", res["bandit_result"])
+        res["semgrep_result"] = scan.get("semgrep_result", res["semgrep_result"])
+
+    return res
+
+def OneShot_gen_code(records, dataset: str, technique: str, limit: int | None = None):
     start_time = time.time()
-
     llm = LLMClient()
     model_tag = sanitize_model_name(llm.model)
 
-    base_dir = PATHS.run_dir(dataset=dataset, model_name=model_tag, technique=technique)
-    base_dir.mkdir(parents=True, exist_ok=True)
+    total_prompt_tokens = 0
+    total_completion_tokens = 0
+    total_api_calls = 0
+    total_llm_time = 0.0
+    total_bandit_time = 0.0
+    total_semgrep_time = 0.0
+    executed_tasks = 0
+    failed_tasks = 0
 
-    one_dir = base_dir / "one_shot"
-    zero_dir = base_dir / "zero_shot"
-    one_dir.mkdir(parents=True, exist_ok=True)
-    zero_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = PATHS.run_dir(dataset=dataset, model_name=model_tag, technique=technique)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    one_jsonl = one_dir / "one_shot.jsonl"
-    zero_jsonl = zero_dir / "zero_shot.jsonl"
+    output_file = out_dir / f"{dataset}.jsonl"
+    failed_file = out_dir / "failed_tasks.jsonl"
 
     retrieval_data = load_retrieval_dataset(RETRIEVAL_DATASET_PATH)
-
-    if retrieval_mode == "similarity":
+    if retrieval_data:
         build_retrieval_index(retrieval_data)
 
-    print(f"Retrieval strategy: {retrieval_mode}")
-    print(f"Total tasks: {len(records)}")
+    with output_file.open("a", encoding="utf-8") as f, failed_file.open("a", encoding="utf-8") as ff:
+        for idx, t in enumerate(records, 1):
+            if limit is not None and idx > limit:
+                break
 
-    one_f = one_jsonl.open("a", encoding="utf-8")
-    zero_f = zero_jsonl.open("a", encoding="utf-8")
+            reset_token_stats()
+            reset_llm_stats()
+            reset_tool_stats()
 
-    for idx, t in enumerate(records, 1):
-        if limit is not None and idx > limit:
-            break
+            task_id = t.get("ID") or t.get("id", "")
+            intent = t.get("Prompt") or t.get("prompt") or ""
+            lang = (t.get("language") or "python").lower()
+            lang_title = "Python" if lang.startswith("py") else lang.capitalize()
+            framework = t.get("framework")
+            cwe = extract_cwe(task_id)
 
-        lang_raw = (t.get("language") or "python").strip().lower()
-        if lang_raw.startswith("py"):
-            lang_title, lang = "Python", "python"
+            example, sim = (None, None)
+            if retrieval_data:
+                example, sim = retrieval_example(intent, cwe, task_id)
 
-        intent = t.get("Prompt", "") or ""
-        task_id = t.get("ID") or t.get("id", "")
+            if example is None:
+                failed_tasks += 1
+                ff.write(json.dumps(t, ensure_ascii=False) + "\n")
+                ff.flush()
+                print(f"[{idx}] skipped (no example)")
+                continue
+            print("\n=======================================")
+            print(f"Task {idx}: {task_id}")
+            print("========================================")
+            prompt_llm = build_prompt(example, intent, lang_title)
+            print(f"[Task {idx}] Generating code...")
+            raw_resp = generate_with_retry(llm, prompt_llm)
+            print(f"[Task {idx}] Code generated.")
 
-        print(f"[DATASET LINE {idx}] id={task_id}")
+            code = extract_raw_code(raw_resp) if raw_resp else ""
 
-        cwe = extract_cwe(task_id)
+            scan = analyze_code_split(code, lang, tmpname=Path(str(task_id)).stem) if code else None
 
-        example = None
-        similarity_score = None
+            parsed = build_parsed_result(task_id, intent, lang, framework, example, sim, code, scan)
+            f.write(json.dumps(parsed, ensure_ascii=False) + "\n")
+            f.flush()
 
-        if cwe and retrieval_data:
-            if retrieval_mode == "random":
-                example = random_example(retrieval_data, cwe, task_id)
-            elif retrieval_mode == "similarity":
-                example, similarity_score = similar_example(cwe, intent, task_id)
+            stats_tok = get_token_stats()
+            stats_llm = get_llm_stats()
+            stats_tool = get_tool_stats()
 
-        prompt_llm, retrieval_mode_label = build_prompt(example, intent, lang_title)
+            total_prompt_tokens += stats_tok.get("prompt_tokens", 0)
+            total_completion_tokens += stats_tok.get("completion_tokens", 0)
+            total_api_calls += stats_llm.get("api_calls", 0)
+            total_llm_time += stats_llm.get("llm_time", 0.0)
+            total_bandit_time += stats_tool.get("bandit_time", 0.0)
+            total_semgrep_time += stats_tool.get("semgrep_time", 0.0)
 
-        raw_resp = generate_with_retry(llm, prompt_llm)
+            executed_tasks += 1
 
-        if raw_resp is None:
-            parsed = build_parsed_result(
-                task_id, intent, lang, t.get("framework"),
-                retrieval_mode, retrieval_mode_label,
-                example, similarity_score,
-                code=""
-            )
-        else:
-            raw_resp = strip_markdown_fences(raw_resp)
-            tmpname = Path(str(task_id or "snippet")).stem
-
-            scan = analyze_code_split(raw_resp, lang, tmpname=tmpname)
-            mode = retrieval_mode_label
-
-            bandit_count = len((scan.get("bandit_result") or {}).get("issues") or [])
-            semgrep_count = len((scan.get("semgrep_result") or {}).get("issues") or [])
-            print(f"[{mode}] task={task_id} bandit={bandit_count} semgrep={semgrep_count}")
-
-            parsed = build_parsed_result(
-                task_id, intent, lang, t.get("framework"),
-                retrieval_mode, retrieval_mode_label,
-                example, similarity_score,
-                code=raw_resp,
-                scan=scan
-            )
-
-        use_f = one_f if retrieval_mode_label == "one_shot" else zero_f
-        use_f.write(json.dumps(parsed, ensure_ascii=False) + "\n")
-        use_f.flush()
-
-    one_f.close()
-    zero_f.close()
+    elapsed = time.time() - start_time
 
     try:
-        one_m_dir = one_dir / "rate" / "vuln_density"
-        zero_m_dir = zero_dir / "rate" / "vuln_density"
-        one_m_dir.mkdir(parents=True, exist_ok=True)
-        zero_m_dir.mkdir(parents=True, exist_ok=True)
-
-        one_m_file = one_m_dir / "one_shot.txt"
-        zero_m_file = zero_m_dir / "zero_shot.txt"
-
-        elapsed = time.time() - start_time
-        token_stats = get_token_stats()
-
-        save_metrics_result(
-            str(one_jsonl),
-            str(one_m_file),
-            run_info={
-                "dataset": dataset,
-                "model": llm.model,
-                "prompt_tokens": token_stats.get("prompt_tokens", 0),
-                "completion_tokens": token_stats.get("completion_tokens", 0),
-                "total_tokens": token_stats.get("total_tokens", 0),
-                "runtime_seconds": elapsed,
-                "retrieval_strategy": retrieval_mode
-            }
-        )
-
-        save_metrics_result(
-            str(zero_jsonl),
-            str(zero_m_file),
-            run_info={
-                "dataset": dataset,
-                "model": llm.model,
-                "prompt_tokens": token_stats.get("prompt_tokens", 0),
-                "completion_tokens": token_stats.get("completion_tokens", 0),
-                "total_tokens": token_stats.get("total_tokens", 0),
-                "runtime_seconds": elapsed,
-                "retrieval_strategy": retrieval_mode
-            }
-        )
-
+        if output_file.exists():
+            save_metrics_result(str(output_file), str(out_dir / "metrics.txt"))
     except Exception:
         pass
 
-    return str(base_dir)
+    save_experiment_summary(
+        out_dir=str(out_dir),
+        dataset=dataset,
+        model=llm.model,
+        technique=technique,
+        total_tasks=executed_tasks,
+        elapsed_time=elapsed,
+        total_llm_time=total_llm_time,
+        total_bandit_time=total_bandit_time,
+        total_semgrep_time=total_semgrep_time,
+        total_api_calls=total_api_calls,
+        total_prompt_tokens=total_prompt_tokens,
+        total_completion_tokens=total_completion_tokens,
+        jsonl_path=str(output_file),
+    )
+    return str(out_dir)

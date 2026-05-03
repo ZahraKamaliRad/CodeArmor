@@ -9,7 +9,7 @@ from .openai_client import LLMClient, sanitize_model_name
 from src.paths import PATHS
 from ..utils.metrics import save_metrics_result
 from .analyzer import analyze_code_split
-from ..utils.tokens import get_token_stats
+from ..utils.usage_stats import get_token_stats
 from ..utils.io import csv_log
 from ..utils.plot_refinment import load_refinement_df, plot_totals
 from ..utils.text_utils import strip_markdown_fences

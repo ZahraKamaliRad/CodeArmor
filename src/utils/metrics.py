@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
+import csv
 
 
 CODE_KEYS = ("final_code", "code")
@@ -114,12 +115,18 @@ def read_records(jsonl_path: str) -> List[Dict[str, Any]]:
 def compute_metrics_for_tool(records: List[Dict[str, Any]], tool_key: str) -> Dict[str, Any]:
     per_item: List[Dict[str, Any]] = []
     for rec in records:
+
+        if tool_key not in rec:
+            continue
+
         code_blob = first_present(rec, CODE_KEYS)
         if not code_blob or not isinstance(code_blob, str) or not code_blob.strip():
             continue
 
         secure, issues = secure_issues_from_tool(rec, tool_key)
         loc = loc_from(rec)
+        if loc <= 0:
+            continue
 
         per_item.append({
             "secure": bool(secure),
@@ -131,8 +138,8 @@ def compute_metrics_for_tool(records: List[Dict[str, Any]], tool_key: str) -> Di
     V = sum(x["issue_count"] for x in per_item)
     L = sum(x["loc"] for x in per_item)
 
-    rate_val = round(safe_div(V, N), 6)
-    dens_val = round(safe_div(V, L), 6)
+    rate_val = round(safe_div(V, N), 4)
+    dens_val = round(safe_div(V, L), 4)
 
     return {
         "items": N,
@@ -180,31 +187,6 @@ def format_metrics_text(jsonl_path: str, run_info: dict | None = None) -> str:
         if model is not None:
             lines.append(f"model:              {model}")
 
-        retrieval_strategy = run_info.get("retrieval_strategy")
-        if retrieval_strategy is not None:
-            lines.append(f"retrieval_strategy: {retrieval_strategy}")
-
-        prompt_tokens = run_info.get("prompt_tokens")
-        completion_tokens = run_info.get("completion_tokens")
-        total_tokens = run_info.get("total_tokens")
-
-        if prompt_tokens is not None or completion_tokens is not None or total_tokens is not None:
-            lines.append("")
-            lines.append("=== Token Usage ===")
-
-            if prompt_tokens is not None:
-                lines.append(f"prompt_tokens:      {prompt_tokens}")
-            if completion_tokens is not None:
-                lines.append(f"completion_tokens:  {completion_tokens}")
-            if total_tokens is not None:
-                lines.append(f"total_tokens:       {total_tokens}")
-
-        runtime_seconds = run_info.get("runtime_seconds")
-        if runtime_seconds is not None:
-            lines.append("")
-            lines.append("=== Runtime ===")
-            lines.append(f"runtime_seconds:    {float(runtime_seconds):.2f}")
-
         lines.append("")
 
     lines.append("=== Security Metrics (Rate & Density) ===")
@@ -220,7 +202,7 @@ def format_metrics_text(jsonl_path: str, run_info: dict | None = None) -> str:
             "",
             f"Vulnerability Rate = V/N = {m['vuln_rate_frac']} = {m['vuln_rate_value']}",
             f"Vulnerability Density = V/L = {m['density_frac']} = {m['density_value']}",
-            "",
+            ""
         ]
 
     if "semgrep" in r:
@@ -250,6 +232,30 @@ def save_metrics_result(jsonl_path: str, out_txt_path: str | None = None, run_in
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(text, encoding="utf-8")
     return out_path
+
+def export_security_metrics_csv(jsonl_path: str):
+    metrics = compute_metrics(jsonl_path)
+    rows = []
+    for tool in ("bandit", "semgrep"):
+        if tool in metrics:
+            rows.append({
+                "tool": tool,
+                "vuln_rate": metrics[tool]["vuln_rate_value"],
+                "vuln_density": metrics[tool]["density_value"],
+                "total_issues": metrics[tool]["total_issues"],
+                "items": metrics[tool]["items"],
+                "loc": metrics[tool]["total_loc"],
+            })
+    p = Path(jsonl_path)
+    csv_path = p.with_suffix("").parent / f"{p.stem}_security_metrics.csv"
+
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=rows[0].keys())
+        w.writeheader()
+        w.writerows(rows)
+
+    return str(csv_path)
+
 
 
 if __name__ == "__main__":

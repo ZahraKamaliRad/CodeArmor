@@ -1,6 +1,16 @@
 from pathlib import Path
 import pandas as pd
 import matplotlib.pyplot as plt
+from src.core.analyzer import ENABLE_BANDIT, ENABLE_SEMGREP
+
+plt.rcParams["figure.dpi"] = 200
+plt.rcParams["font.size"] = 11
+plt.rcParams["font.family"] = "DejaVu Sans"
+plt.rcParams["axes.linewidth"] = 1.2
+plt.rcParams["axes.labelsize"] = 12
+plt.rcParams["xtick.labelsize"] = 10
+plt.rcParams["ytick.labelsize"] = 10
+plt.rcParams["legend.frameon"] = False
 
 
 TASK_COL = "task_id"
@@ -82,8 +92,9 @@ def totals_carry_forward(pivot: pd.DataFrame) -> pd.Series:
     return totals.sort_index().astype(int)
 
 
-def compute_totals_by_analyzer(csv_path: Path,analyzer: str,df: pd.DataFrame | None = None,
-    cumulative: bool = True) -> pd.Series:
+def compute_totals_by_analyzer(
+    csv_path: Path, analyzer: str, df: pd.DataFrame | None = None, cumulative: bool = True
+) -> pd.Series:
 
     if df is None:
         df = load_refinement_df(csv_path)
@@ -101,19 +112,28 @@ def compute_totals_by_analyzer(csv_path: Path,analyzer: str,df: pd.DataFrame | N
     return totals_carry_forward(pivot) if cumulative else totals_point_in_time(pivot)
 
 
-def plot_totals(csv_path: Path,out: Path | None = None,kind: str = "line",
-    show: bool = True,df: pd.DataFrame | None = None,verbose: bool = False,
-    cumulative: bool = True,) -> Path | None:
+def plot_totals(csv_path: Path,out: Path | None = None,kind: str = "line",show: bool = True,
+    df: pd.DataFrame | None = None,verbose: bool = False,cumulative: bool = True,) -> Path | None:
+
+    if not ENABLE_BANDIT and not ENABLE_SEMGREP:
+        print("[warn] No analyzer tools enabled (ENABLE_BANDIT/ENABLE_SEMGREP are both False).")
+        return None
 
     if df is None:
         df = load_refinement_df(csv_path)
 
-    bandit_totals = compute_totals_by_analyzer(
-        csv_path, "bandit", df=df, cumulative=cumulative
-    )
-    semgrep_totals = compute_totals_by_analyzer(
-        csv_path, "semgrep", df=df, cumulative=cumulative
-    )
+    bandit_totals = pd.Series(dtype=int)
+    semgrep_totals = pd.Series(dtype=int)
+
+    if ENABLE_BANDIT:
+        bandit_totals = compute_totals_by_analyzer(
+            csv_path, "bandit", df=df, cumulative=cumulative
+        )
+
+    if ENABLE_SEMGREP:
+        semgrep_totals = compute_totals_by_analyzer(
+            csv_path, "semgrep", df=df, cumulative=cumulative
+        )
 
     if bandit_totals.empty and semgrep_totals.empty:
         print("[warn] No data to plot.")
@@ -124,19 +144,23 @@ def plot_totals(csv_path: Path,out: Path | None = None,kind: str = "line",
     if kind == "bar":
         kind = "line"
 
-    if not bandit_totals.empty and bandit_totals.sum() > 0:
+    if ENABLE_BANDIT and not bandit_totals.empty:
         plt.plot(
             list(bandit_totals.index),
             list(bandit_totals.values),
-            linewidth=2.5,
+            linewidth=2.2,
+            marker="o",
+            markersize=5,
             label="Bandit",
         )
 
-    if not semgrep_totals.empty and semgrep_totals.sum() > 0:
+    if ENABLE_SEMGREP and not semgrep_totals.empty:
         plt.plot(
             list(semgrep_totals.index),
             list(semgrep_totals.values),
-            linewidth=2.5,
+            linewidth=2.2,
+            marker="s",
+            markersize=5,
             label="Semgrep",
         )
 
@@ -154,13 +178,13 @@ def plot_totals(csv_path: Path,out: Path | None = None,kind: str = "line",
 
     plt.xlabel("Iterations")
     plt.ylabel("Total vulnerabilities")
-    plt.grid(True, linestyle="--", alpha=0.4)
+    plt.grid(True, linestyle="--", alpha=0.35)
     plt.legend()
     plt.tight_layout()
 
     if out:
         out.parent.mkdir(parents=True, exist_ok=True)
-        plt.savefig(out, dpi=200)
+        plt.savefig(out, dpi=300, bbox_inches="tight")
         plt.close()
         return out
     else:

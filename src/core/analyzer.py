@@ -10,6 +10,8 @@ import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 from datetime import datetime
+from ..utils.usage_stats import record_tool_time
+
 
 
 ENABLE_BANDIT = True
@@ -102,11 +104,9 @@ def extract_cwe_keys(cwe_field: Any) -> List[str]:
 
 def run_bandit(fpath: Path) -> List[Issue]:
     which_or_raise("bandit")
-    p = subprocess.run(
-        ["bandit", "-q", "-f", "json", str(fpath)],
-        capture_output=True,
-        text=True
-    )
+    p = subprocess.run(["bandit", "-q", "-f", "json", str(fpath)],
+        capture_output=True,text=True)
+    
     out = (p.stdout or "").strip()
     if not out:
         return []
@@ -224,10 +224,14 @@ def analyze_code(code: str,language: str,tools: Optional[List[str]] = None,
                     issues = []
 
                 duration = time.time() - start
+                record_tool_time(tool , duration)
+
                 print(f"[analysis] {tool} finished in {duration:.2f}s | issues={len(issues)}")
 
             except Exception as e:
+
                 duration = time.time() - start
+                record_tool_time(tool, duration)
                 print(f"[analysis] {tool} FAILED after {duration:.2f}s | error={e}")
                 issues = []
 
