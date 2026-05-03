@@ -10,7 +10,7 @@ from src.core.rci import rci_gen_code
 from src.core.self_refine import SelfRefine_gen_code
 from src.core.one_shot import OneShot_gen_code
 from src.core.CoT import cot_gen_code
-from src.core.planning_few_shot import planning_few_code_gen
+from src.core.planning_few_shot import planning_few_shot_gen_code
 from src.core.persona import persona_gen_code
 from src.config_loader import override_config
 from src.core.planning_rci import planning_rci_gen_code
@@ -76,7 +76,7 @@ def run_self_refine(dataset: str, file: str, limit: int, iterations: int):
 
 def run_planning_few_shot(dataset: str, file: str, limit: int, iterations: int):
     records, out = load_records(dataset, file)
-    planning_few_code_gen(records, dataset, tech("planning_few_shot", iterations),
+    planning_few_shot_gen_code(records, dataset, tech("planning_few_shot", iterations),
                           limit=limit, iterations=iterations, output_filename=out)
 
 
@@ -94,7 +94,7 @@ def run_persona(dataset: str, file: str, limit: int):
     records, out = load_records(dataset, file)
     persona_gen_code(records, dataset, "persona", limit=limit, output_filename=out)
     
-    
+
 def run_planning_rci(dataset: str, file: str, limit: int, iterations: int):
     records, out = load_records(dataset, file)
     planning_rci_gen_code(records, dataset, tech("planning_rci", iterations),
