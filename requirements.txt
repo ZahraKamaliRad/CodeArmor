@@ -7,3 +7,5 @@ sentence-transformers
 scikit-learn
 bandit
 semgrep
+openai
+openpyxl
