@@ -332,6 +332,59 @@ def render_code_with_lines(code: str) -> str:
     inner = "\n".join(f"<span class='code-line'>{esc(l)}</span>" for l in lines)
     return f"<div class='code-wrap'><pre class='code-pre'>{inner}</pre></div>"
 
+def render_iterations(obj: dict) -> str:
+    iterations = []
+
+    if obj.get("critique_before_last") and obj.get("code_before_last"):
+        iterations.append({
+            "title": "Iteration (before last)",
+            "review": obj.get("critique_before_last"),
+            "code": obj.get("code_before_last"),
+        })
+
+    if obj.get("final_code"):
+        iterations.append({
+            "title": "Final iteration",
+            "review": None,
+            "code": obj.get("final_code"),
+        })
+
+    if not iterations:
+        return ""
+
+    blocks = []
+    for it in iterations:
+
+        review_html = ""
+        if it["review"]:
+            review_html = f"""
+<details>
+  <summary>Review</summary>
+  <pre style="margin-top:10px;white-space:pre-wrap;line-height:1.35">{esc(it["review"])}</pre>
+</details>
+"""
+
+        blocks.append(f"""
+<div class="card">
+  <div class="subttl">{esc(it["title"])}</div>
+
+  {review_html}
+
+  <details>
+    <summary>Code</summary>
+    {render_code_with_lines(it["code"])}
+  </details>
+</div>
+""")
+
+    return f"""
+<details>
+  <summary>Iterations</summary>
+  <div style="margin-top:12px" class="grid">
+    {''.join(blocks)}
+  </div>
+</details>
+"""
 
 def render_item(i: int, obj: dict, langs: set):
     task = obj.get("task") or ""
@@ -496,6 +549,9 @@ def render_item(i: int, obj: dict, langs: set):
     <summary>Generated code</summary>
     {render_code_with_lines(code)}
   </details>
+
+<div style="height:10px"></div>
+{render_iterations(obj)}
 
   <hr/>
 
