@@ -3,6 +3,7 @@ import json
 import re
 import time
 from pathlib import Path
+from tqdm import tqdm
 from typing import Any, Dict, Tuple
 from .openai_client import LLMClient, sanitize_model_name
 from src.paths import PATHS
@@ -258,6 +259,7 @@ def refinment_loop(llm: LLMClient,code: str,lang: str,task_name: str,iterations:
     return current_code, scan, code_before_last, critique_before_last
 
 
+
 def planning_rci_gen_code(records,dataset: str,technique: str,limit: int | None = None,
     iterations: int = 0,output_filename: str | None = None,) -> str:
 
@@ -284,9 +286,15 @@ def planning_rci_gen_code(records,dataset: str,technique: str,limit: int | None 
 
     if not isinstance(records, list):
         records = list(records)
+    total_tasks = len(records) if limit is None else min(len(records), limit)
 
-    with output_file.open("a", encoding="utf-8") as f:
+    ema_task_time = None
+    ema_alpha = 0.25
+
+    with output_file.open("a", encoding="utf-8") as f, tqdm(total=total_tasks, desc="Overall Progress") as pbar:
         for idx, t in enumerate(records, 1):
+
+            task_start = time.time()
 
             reset_token_stats()
             reset_llm_stats()
@@ -339,6 +347,15 @@ def planning_rci_gen_code(records,dataset: str,technique: str,limit: int | None 
                 total_semgrep_time += task_tool_stats.get("semgrep_time", 0)
                 executed_tasks += 1
 
+                task_elapsed = time.time() - task_start
+                if ema_task_time is None:
+                    ema_task_time = task_elapsed
+                else:
+                    ema_task_time = ema_alpha * task_elapsed + (1 - ema_alpha) * ema_task_time
+
+                remaining = total_tasks - idx
+                pbar.set_postfix_str(f"ETA {(ema_task_time * remaining)/60:.1f} min")
+                pbar.update(1)
                 continue
 
             plan_text = extract_plan(plan_resp)
@@ -372,6 +389,16 @@ def planning_rci_gen_code(records,dataset: str,technique: str,limit: int | None 
                 total_bandit_time += task_tool_stats.get("bandit_time", 0)
                 total_semgrep_time += task_tool_stats.get("semgrep_time", 0)
                 executed_tasks += 1
+
+                task_elapsed = time.time() - task_start
+                if ema_task_time is None:
+                    ema_task_time = task_elapsed
+                else:
+                    ema_task_time = ema_alpha * task_elapsed + (1 - ema_alpha) * ema_task_time
+
+                remaining = total_tasks - idx
+                pbar.set_postfix_str(f"ETA {(ema_task_time * remaining)/60:.1f} min")
+                pbar.update(1)
 
                 continue
 
@@ -435,6 +462,16 @@ def planning_rci_gen_code(records,dataset: str,technique: str,limit: int | None 
             total_bandit_time += task_tool_stats.get("bandit_time", 0)
             total_semgrep_time += task_tool_stats.get("semgrep_time", 0)
             executed_tasks += 1
+
+            task_elapsed = time.time() - task_start
+            if ema_task_time is None:
+                ema_task_time = task_elapsed
+            else:
+                ema_task_time = ema_alpha * task_elapsed + (1 - ema_alpha) * ema_task_time
+
+            remaining = total_tasks - idx
+            pbar.set_postfix_str(f"ETA {(ema_task_time * remaining)/60:.1f} min")
+            pbar.update(1)
 
     elapsed = time.time() - start_time
 

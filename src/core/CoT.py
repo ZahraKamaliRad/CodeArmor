@@ -3,7 +3,7 @@ from pathlib import Path
 import json
 import re
 import time
-
+from tqdm import tqdm
 from .openai_client import LLMClient, sanitize_model_name
 from src.paths import PATHS
 from ..utils.metrics import save_metrics_result
@@ -99,7 +99,7 @@ def extract_thinking(resp: str) -> str:
     return m.group(2).strip()
 
 
-def cot_gen_code(records, dataset: str, technique: str,limit: int | None = None,output_filename: str | None = None) -> str:
+def cot_gen_code(records, dataset: str, technique: str, limit: int | None = None, output_filename: str | None = None) -> str:
 
     start_time = time.time()
     llm = LLMClient()
@@ -124,11 +124,18 @@ def cot_gen_code(records, dataset: str, technique: str,limit: int | None = None,
     if not isinstance(records, list):
         records = list(records)
 
-    with output_file.open("a", encoding="utf-8") as f:
+    total_tasks = len(records) if limit is None else min(len(records), limit)
+
+    ema_task_time = None
+    ema_alpha = 0.25
+
+    with output_file.open("a", encoding="utf-8") as f, tqdm(total=total_tasks, desc="Overall Progress") as pbar:
 
         for idx, t in enumerate(records, 1):
             if limit is not None and idx > limit:
                 break
+
+            task_start = time.time()
 
             reset_token_stats()
             reset_llm_stats()
@@ -228,6 +235,18 @@ def cot_gen_code(records, dataset: str, technique: str,limit: int | None = None,
 
             executed_tasks += 1
 
+            task_elapsed = time.time() - task_start
+            if ema_task_time is None:
+                ema_task_time = task_elapsed
+            else:
+                ema_task_time = ema_alpha * task_elapsed + (1 - ema_alpha) * ema_task_time
+
+            remaining = total_tasks - executed_tasks
+            eta_min = (ema_task_time * remaining) / 60
+
+            pbar.set_postfix_str(f"ETA {eta_min:.1f} min")
+            pbar.update(1)
+
     elapsed = time.time() - start_time
 
     try:
@@ -244,8 +263,8 @@ def cot_gen_code(records, dataset: str, technique: str,limit: int | None = None,
             }
         )
 
-    except Exception as e:
-        print(f"[metrics-save] {e}")
+    except Exception:
+        pass
 
     save_experiment_summary(
         out_dir=str(out_dir),

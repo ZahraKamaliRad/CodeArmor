@@ -10,6 +10,8 @@ from ..utils.plot_refinment import load_refinement_df, plot_totals
 from ..utils.text_utils import strip_markdown_fences
 from ..utils.usage_stats import (get_token_stats,get_llm_stats,get_tool_stats,reset_token_stats,reset_llm_stats,reset_tool_stats)
 from ..utils.save_details_result import save_experiment_summary
+from tqdm import tqdm
+
 
 BASE_TEMPLATE = """You are a code generator.
 You will be given:
@@ -182,7 +184,9 @@ def refinment_loop(llm,initial_code: str,lang: str,task_id: str,tmpname: str,ite
     return current_code, history
 
 
-def rci_gen_code(records,dataset: str,technique: str,limit: int | None = None,iterations: int = 1,output_filename: str | None = None):
+
+def rci_gen_code(records,dataset: str,technique: str,limit: int | None = None,
+                 iterations: int = 1,output_filename: str | None = None):
 
     start_time = time.time()
     llm = LLMClient()
@@ -204,9 +208,20 @@ def rci_gen_code(records,dataset: str,technique: str,limit: int | None = None,it
     output_file = out_dir / output_filename
     run_out_dir = str(out_dir)
 
-    with output_file.open("a", encoding="utf-8") as f:
+    total_records = len(records)
+    if limit is not None:
+        total_tasks = min(total_records, limit)
+    else:
+        total_tasks = total_records
+
+    ema_task_time = None
+    ema_alpha = 0.25
+
+    with output_file.open("a", encoding="utf-8") as f, tqdm(total=total_tasks, desc="Overall Progress") as pbar:
 
         for idx, t in enumerate(records, 1):
+
+            task_start = time.time()
 
             reset_token_stats()
             reset_llm_stats()
@@ -260,6 +275,7 @@ def rci_gen_code(records,dataset: str,technique: str,limit: int | None = None,it
                 print("[Coding] Code generated.")
 
                 initial_code = extract_code(raw_initial)
+
                 final_code, history = refinment_loop(
                     llm=llm,
                     initial_code=initial_code,
@@ -309,6 +325,17 @@ def rci_gen_code(records,dataset: str,technique: str,limit: int | None = None,it
             total_semgrep_time += task_tool_stats.get("semgrep_time", 0)
 
             executed_tasks += 1
+
+            task_elapsed = time.time() - task_start
+            if ema_task_time is None:
+                ema_task_time = task_elapsed
+            else:
+                ema_task_time = ema_alpha * task_elapsed + (1 - ema_alpha) * ema_task_time
+
+            remaining = total_tasks - idx
+            eta_min = (ema_task_time * remaining) / 60
+            pbar.set_postfix_str(f"ETA {eta_min:.1f} min")
+            pbar.update(1)
 
     elapsed = time.time() - start_time
 
