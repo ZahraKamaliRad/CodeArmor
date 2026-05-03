@@ -36,6 +36,15 @@ def save_experiment_summary(
 ):
 
     metrics = compute_metrics(jsonl_path)
+    real_total_tasks = None
+
+    if "bandit" in metrics:
+        real_total_tasks = metrics["bandit"]["items"]
+    elif "semgrep" in metrics:
+        real_total_tasks = metrics["semgrep"]["items"]
+
+    if real_total_tasks is None:
+        real_total_tasks = total_tasks
 
     bandit_rate = metrics.get("bandit", {}).get("vuln_rate_value", 0)
     bandit_density = metrics.get("bandit", {}).get("density_value", 0)
@@ -82,7 +91,7 @@ def save_experiment_summary(
         dataset,
         model,
         technique,
-        total_tasks,
+        real_total_tasks,
         bandit_rate,
         bandit_density,
         semgrep_rate,
@@ -99,7 +108,7 @@ def save_experiment_summary(
         avg_llm_time_per_task,
         avg_bandit_time_per_task,
         avg_semgrep_time_per_task,
-        avg_api_calls_per_task,
+        avg_api_calls_per_task
     ]
 
     try:
