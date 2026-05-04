@@ -8,6 +8,11 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from typing import Dict, List, Tuple
 import argparse
+from decimal import Decimal
+from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
+from openpyxl.styles import Alignment
+import numpy as np
 
 class SecurityMetricsConsolidator:
     def __init__(self, input_dir: str, output_dir: str):
@@ -17,6 +22,7 @@ class SecurityMetricsConsolidator:
         
         self.data = []
         self.method_groups = defaultdict(list)
+        self.details_data = []
 
     def parse_metrics_file(self, filepath: Path) -> Dict:
         """Parse a SALLM_metrics.txt file and extract metrics."""
@@ -147,6 +153,11 @@ class SecurityMetricsConsolidator:
                                 metrics['method_dir'] = method_dir.name
                                 self.data.append(metrics)
                                 self.method_groups[sub_method].append(metrics)
+                            
+                            # Collect details_result.xlsx
+                            details_file = method_dir / sub_method / 'details_result' / 'details_result.xlsx'
+                            if details_file.exists():
+                                self.collect_details_result(details_file, database, model, sub_method, run_num)
                     else:
                         # Standard structure
                         metrics_file = method_dir / 'rate' / 'vuln_density' / 'SALLM_metrics.txt'
@@ -159,6 +170,122 @@ class SecurityMetricsConsolidator:
                             metrics['method_dir'] = method_dir.name
                             self.data.append(metrics)
                             self.method_groups[method_name].append(metrics)
+                        
+                        # Collect details_result.xlsx
+                        details_file = method_dir / 'details_result' / 'details_result.xlsx'
+                        if details_file.exists():
+                            self.collect_details_result(details_file, database, model, method_name, run_num)
+    
+    def collect_details_result(self, filepath: Path, database: str, model: str, method: str, run_num: int):
+        """Collect data from details_result.xlsx files."""
+        try:
+            df = pd.read_excel(filepath)
+            df['database'] = database
+            df['model'] = model
+            df['technique'] = method
+            df['run_number'] = run_num
+            self.details_data.append(df)
+        except Exception as e:
+            print(f"Warning: Could not read {filepath}: {e}")
+    
+    def count_decimals(self, value):
+        """Count decimal places in a value."""
+        try:
+            d = Decimal(str(value))
+            return max(0, -d.as_tuple().exponent)
+        except:
+            return 0
+    
+    def process_details_data(self):
+        """Process details_result.xlsx files similar to the second script."""
+        if not self.details_data:
+            return None, None
+        
+        all_data = pd.concat(self.details_data, ignore_index=True)
+        
+        # Remove run numbers from technique names
+        all_data["technique"] = all_data["technique"].astype(str).str.replace(r"\(\d+\)$", "", regex=True)
+        
+        group_cols = ["database", "model", "technique"]
+        summary_rows = []
+        
+        for _, group in all_data.groupby(group_cols):
+            numeric_cols = group.select_dtypes(include="number").columns
+            decimal_map = {}
+            for col in numeric_cols:
+                first_val = group[col].dropna()
+                if len(first_val) > 0:
+                    decimal_map[col] = self.count_decimals(first_val.iloc[0])
+                else:
+                    decimal_map[col] = 2
+            
+            means = group[numeric_cols].mean()
+            for col in numeric_cols:
+                means[col] = round(means[col], decimal_map[col])
+            
+            base_row = group.iloc[0].copy()
+            for col in numeric_cols:
+                base_row[col] = means[col]
+            
+            summary_rows.append(base_row)
+        
+        summary_df = pd.DataFrame(summary_rows)
+        summary_df = summary_df[all_data.columns]
+        summary_df = summary_df.sort_values(by=["database", "model", "technique"]).reset_index(drop=True)
+        
+        if 'bandit_rate' in summary_df.columns:
+            summary_df["bandit_rate"] = summary_df["bandit_rate"].round(2)
+        if 'bandit_density' in summary_df.columns:
+            summary_df["bandit_density"] = summary_df["bandit_density"].round(2)
+        
+        # Calculate reduction rates
+        reduction_rows = []
+        
+        for (dataset, model), group in summary_df.groupby(["dataset", "model"]):
+            direct = group[group["technique"] == "direct"]
+            if direct.empty:
+                continue
+            
+            direct = direct.iloc[0]
+            
+            d_bandit_rate = direct.get("bandit_rate", 0)
+            d_bandit_density = direct.get("bandit_density", 0)
+            d_semgrep_rate = direct.get("semgrep_rate", 0)
+            d_semgrep_density = direct.get("semgrep_density", 0)
+            
+            for _, row in group.iterrows():
+                def safe_reduction(base, value):
+                    if pd.isna(base) or base == 0:
+                        return 0
+                    return ((base - value) / base) * 100
+                
+                reduction_rows.append({
+                    "dataset": row["dataset"],
+                    "model": row["model"],
+                    "technique": row["technique"],
+                    "bandit_rate(*100)": row.get("bandit_rate", 0) * 100,
+                    "bandit_density(*1000)": row.get("bandit_density", 0) * 1000,
+                    "semgrep_rate(*100)": row.get("semgrep_rate", 0) * 100,
+                    "semgrep_density(*1000)": row.get("semgrep_density", 0) * 1000,
+                    "%▼bandit_rate": round(safe_reduction(d_bandit_rate, row.get("bandit_rate", 0)), 2),
+                    "%▼bandit_density": round(safe_reduction(d_bandit_density, row.get("bandit_density", 0)), 2),
+                    "%▼semgrep_rate": round(safe_reduction(d_semgrep_rate, row.get("semgrep_rate", 0)), 2),
+                    "%▼semgrep_density": round(safe_reduction(d_semgrep_density, row.get("semgrep_density", 0)), 2),
+                })
+        
+        reduction_df = pd.DataFrame(reduction_rows)
+        
+        if not reduction_df.empty:
+            reduction_df = reduction_df[
+                ["dataset", "model", "technique",
+                 "bandit_rate(*100)", "bandit_density(*1000)",
+                 "semgrep_rate(*100)", "semgrep_density(*1000)",
+                 "%▼bandit_rate", "%▼bandit_density",
+                 "%▼semgrep_rate", "%▼semgrep_density"]
+            ]
+            reduction_df = reduction_df.sort_values(by=["dataset", "model", "technique"]).reset_index(drop=True)
+        
+        return summary_df, reduction_df
     
     def create_summary_report(self):
         """Create a comprehensive summary report."""
@@ -244,7 +371,7 @@ class SecurityMetricsConsolidator:
         if df.empty:
             return
         
-        # Extract iteration number for iterative methods - FIXED REGEX
+        # Extract iteration number for iterative methods
         df['base_method'] = df['method'].str.replace(r'_iter\d+$', '', regex=True)
         df['iteration'] = df['method'].str.extract(r'_iter(\d+)$').fillna(0).astype(int)
         
@@ -262,6 +389,23 @@ class SecurityMetricsConsolidator:
                 'runtime_seconds': ['mean', 'std']
             })
             iter_analysis.to_csv(self.output_dir / 'iteration_analysis.csv')
+    
+    def autosize_columns(self, ws):
+        """Auto-size columns in Excel worksheet."""
+        for column in ws.columns:
+            max_length = 0
+            col = column[0].column
+            for cell in column:
+                if cell.value:
+                    max_length = max(max_length, len(str(cell.value)))
+            ws.column_dimensions[get_column_letter(col)].width = max_length + 2
+    
+    def center_align(self, ws):
+        """Center align all cells in Excel worksheet."""
+        align = Alignment(horizontal="center", vertical="center")
+        for row in ws.iter_rows():
+            for cell in row:
+                cell.alignment = align
     
     def create_plots(self):
         """Generate visualization plots."""
@@ -331,39 +475,7 @@ class SecurityMetricsConsolidator:
             plt.savefig(self.output_dir / 'vulnerability_density_comparison.png', dpi=300)
             plt.close()
         
-        # 3. Vulnerability Rate Heatmap (Separate)
-        if 'bandit_rate' in df.columns and 'semgrep_rate' in df.columns:
-            fig, ax = plt.subplots(figsize=(12, 10))
-            
-            heatmap_data = df.groupby('method')[['bandit_rate', 'semgrep_rate']].mean()
-            
-            sns.heatmap(heatmap_data.T, annot=True, fmt='.4f', cmap='YlOrRd', 
-                       ax=ax, cbar_kws={'label': 'Vulnerability Rate'})
-            
-            ax.set_title('Vulnerability Rate Heatmap by Method', fontsize=16, fontweight='bold')
-            ax.set_xlabel('Method', fontsize=12)
-            ax.set_ylabel('Metric', fontsize=12)
-            plt.tight_layout()
-            plt.savefig(self.output_dir / 'vulnerability_rate_heatmap.png', dpi=300)
-            plt.close()
-        
-        # 4. Vulnerability Density Heatmap (Separate)
-        if 'bandit_density' in df.columns and 'semgrep_density' in df.columns:
-            fig, ax = plt.subplots(figsize=(12, 10))
-            
-            heatmap_data = df.groupby('method')[['bandit_density', 'semgrep_density']].mean()
-            
-            sns.heatmap(heatmap_data.T, annot=True, fmt='.6f', cmap='YlOrRd', 
-                       ax=ax, cbar_kws={'label': 'Vulnerability Density'})
-            
-            ax.set_title('Vulnerability Density Heatmap by Method', fontsize=16, fontweight='bold')
-            ax.set_xlabel('Method', fontsize=12)
-            ax.set_ylabel('Metric', fontsize=12)
-            plt.tight_layout()
-            plt.savefig(self.output_dir / 'vulnerability_density_heatmap.png', dpi=300)
-            plt.close()
-        
-        # 5. Token Usage Comparison
+        # 3. Token Usage Comparison
         if 'total_tokens' in df.columns:
             fig, ax = plt.subplots(figsize=(14, 8))
             
@@ -378,7 +490,7 @@ class SecurityMetricsConsolidator:
             plt.savefig(self.output_dir / 'token_usage_comparison.png', dpi=300)
             plt.close()
         
-        # 6. Runtime Comparison
+        # 4. Runtime Comparison
         if 'runtime_seconds' in df.columns:
             fig, ax = plt.subplots(figsize=(14, 8))
             
@@ -393,7 +505,7 @@ class SecurityMetricsConsolidator:
             plt.savefig(self.output_dir / 'runtime_comparison.png', dpi=300)
             plt.close()
         
-        # 7. Iteration Effect Analysis - FIXED REGEX
+        # 5. Iteration Effect Analysis
         df['base_method'] = df['method'].str.replace(r'_iter\d+$', '', regex=True)
         df['iteration'] = df['method'].str.extract(r'_iter(\d+)$').fillna(0).astype(int)
         
@@ -419,143 +531,119 @@ class SecurityMetricsConsolidator:
                     ax.set_title(f'{title} vs Iterations', fontsize=12, fontweight='bold')
                     ax.set_xlabel('Iteration', fontsize=10)
                     ax.set_ylabel(metric.replace('_', ' ').title(), fontsize=10)
-                    ax.legend()
+                    ax.legend(fontsize=8)
                     ax.grid(alpha=0.3)
             
             plt.tight_layout()
             plt.savefig(self.output_dir / 'iteration_effect_analysis.png', dpi=300)
             plt.close()
         
-        # 8. Box plots for variability analysis
-        if 'bandit_rate' in df.columns:
-            fig, axes = plt.subplots(2, 1, figsize=(14, 12))
-            
-            df_sorted = df.sort_values('method')
-            
-            sns.boxplot(data=df_sorted, x='method', y='bandit_rate', ax=axes[0], palette='Set2')
-            axes[0].set_title('Bandit Vulnerability Rate Distribution by Method', fontsize=14, fontweight='bold')
-            axes[0].set_xlabel('Method', fontsize=11)
-            axes[0].set_ylabel('Vulnerability Rate', fontsize=11)
-            axes[0].tick_params(axis='x', rotation=45)
-            axes[0].grid(axis='y', alpha=0.3)
-            
-            sns.boxplot(data=df_sorted, x='method', y='semgrep_rate', ax=axes[1], palette='Set3')
-            axes[1].set_title('Semgrep Vulnerability Rate Distribution by Method', fontsize=14, fontweight='bold')
-            axes[1].set_xlabel('Method', fontsize=11)
-            axes[1].set_ylabel('Vulnerability Rate', fontsize=11)
-            axes[1].tick_params(axis='x', rotation=45)
-            axes[1].grid(axis='y', alpha=0.3)
-            
+        # 6. Box Plot for Vulnerability Rate Distribution
+        if 'semgrep_rate' in df.columns:
+            fig, ax = plt.subplots(figsize=(14, 8))
+            sns.boxplot(data=df, x='method', y='semgrep_rate', palette='Set3', ax=ax)
+            ax.set_title('Semgrep Vulnerability Rate Distribution', fontsize=16, fontweight='bold')
+            ax.set_xlabel('Method', fontsize=12)
+            ax.set_ylabel('Semgrep Vulnerability Rate', fontsize=12)
+            plt.xticks(rotation=45)
             plt.tight_layout()
-            plt.savefig(self.output_dir / 'vulnerability_rate_distribution.png', dpi=300)
+            plt.savefig(self.output_dir / 'semgrep_rate_distribution.png', dpi=300)
+            plt.close()
+        
+        # 7. Box Plot for Density Distribution (new requirement)
+        if 'semgrep_density' in df.columns:
+            fig, ax = plt.subplots(figsize=(14, 8))
+            sns.boxplot(data=df, x='method', y='semgrep_density', palette='coolwarm', ax=ax)
+            ax.set_title('Semgrep Vulnerability Density Distribution', fontsize=16, fontweight='bold')
+            ax.set_xlabel('Method', fontsize=12)
+            ax.set_ylabel('Vulnerability Density (Semgrep)', fontsize=12)
+            plt.xticks(rotation=45)
+            plt.tight_layout()
+            plt.savefig(self.output_dir / 'semgrep_density_distribution.png', dpi=300)
+            plt.close()
+
+        # 8. If reduction data is available, plot density reduction
+        summary_df, reduction_df = self.process_details_data()
+        if reduction_df is not None and not reduction_df.empty:
+            fig, ax = plt.subplots(figsize=(14, 8))
+            sns.barplot(data=reduction_df, x='technique', y='%▼semgrep_density', palette='Purples', ax=ax)
+            ax.set_title('Semgrep Density Reduction Rate by Technique', fontsize=16, fontweight='bold')
+            ax.set_xlabel('Technique', fontsize=12)
+            ax.set_ylabel('% Reduction in Semgrep Density', fontsize=12)
+            plt.xticks(rotation=45)
+            plt.tight_layout()
+            plt.savefig(self.output_dir / 'semgrep_density_reduction.png', dpi=300)
             plt.close()
     
     def create_excel_report(self):
-        """Create a comprehensive Excel report with multiple sheets."""
-        df = pd.DataFrame(self.data)
-        
-        if df.empty:
-            return
-        
+        """Compile results into a comprehensive Excel workbook."""
         excel_path = self.output_dir / 'comprehensive_report.xlsx'
+        with pd.ExcelWriter(excel_path) as writer:
+            raw_df = pd.DataFrame(self.data)
+            if not raw_df.empty:
+                raw_df.to_excel(writer, index=False, sheet_name='Raw Data')
+            
+            # Method Summary
+            summary_path = self.output_dir / 'method_summary_flat.csv'
+            if summary_path.exists():
+                summary_df = pd.read_csv(summary_path)
+                summary_df.to_excel(writer, index=False, sheet_name='Method Summary')
+            
+            # Per Run Details
+            detailed_path = self.output_dir / 'detailed_per_run.csv'
+            if detailed_path.exists():
+                detailed_df = pd.read_csv(detailed_path)
+                detailed_df.to_excel(writer, index=False, sheet_name='Per Run Details')
+            
+            # Iteration Analysis
+            iter_path = self.output_dir / 'iteration_analysis.csv'
+            if iter_path.exists():
+                iter_df = pd.read_csv(iter_path)
+                iter_df.to_excel(writer, index=False, sheet_name='Iteration Analysis')
+            
+            # Rankings (placeholder)
+            if not raw_df.empty:
+                rank_df = raw_df.groupby('method')[['semgrep_rate', 'semgrep_density']].mean().sort_values(
+                    by='semgrep_rate', ascending=True
+                )
+                rank_df.to_excel(writer, sheet_name='Rankings')
+            
+            # Details Summary if available
+            summary_df, reduction_df = self.process_details_data()
+            if summary_df is not None:
+                summary_df.to_excel(writer, index=False, sheet_name='Details Summary')
+            if reduction_df is not None:
+                reduction_df.to_excel(writer, index=False, sheet_name='Reduction Rates')
         
-        with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
-            # Sheet 1: Raw Data
-            df.to_excel(writer, sheet_name='Raw Data', index=False)
-            
-            # Sheet 2: Method Summary
-            summary = df.groupby('method').agg({
-                'bandit_rate': ['mean', 'std', 'min', 'max'],
-                'bandit_density': ['mean', 'std', 'min', 'max'],
-                'semgrep_rate': ['mean', 'std', 'min', 'max'],
-                'semgrep_density': ['mean', 'std', 'min', 'max'],
-                'total_tokens': ['mean', 'std'],
-                'runtime_seconds': ['mean', 'std']
-            })
-            summary.to_excel(writer, sheet_name='Method Summary')
-            
-            # Sheet 3: Detailed Per Run
-            detailed = df[['method', 'run_number', 'bandit_rate', 'bandit_density', 
-                          'semgrep_rate', 'semgrep_density', 'total_tokens', 'runtime_seconds']]
-            detailed = detailed.sort_values(['method', 'run_number'])
-            detailed.to_excel(writer, sheet_name='Per Run Details', index=False)
-            
-            # Sheet 4: Iteration Analysis - FIXED REGEX
-            df['base_method'] = df['method'].str.replace(r'_iter\d+$', '', regex=True)
-            df['iteration'] = df['method'].str.extract(r'_iter(\d+)$').fillna(0).astype(int)
-            iterative_df = df[df['iteration'] > 0]
-            
-            if not iterative_df.empty:
-                iter_analysis = iterative_df.groupby(['base_method', 'iteration']).agg({
-                    'bandit_rate': ['mean', 'std'],
-                    'semgrep_rate': ['mean', 'std'],
-                    'bandit_density': ['mean', 'std'],
-                    'semgrep_density': ['mean', 'std']
-                })
-                iter_analysis.to_excel(writer, sheet_name='Iteration Analysis')
-            
-            # Sheet 5: Rankings
-            rankings = pd.DataFrame({
-                'Method': df.groupby('method')['bandit_rate'].mean().sort_values().index,
-                'Avg Bandit Rate': df.groupby('method')['bandit_rate'].mean().sort_values().values,
-                'Bandit Rank': range(1, len(df['method'].unique()) + 1)
-            })
-            rankings.to_excel(writer, sheet_name='Rankings', index=False)
-        
-        print(f"Excel report created: {excel_path}")
+        # Post-process Excel for formatting
+        wb = load_workbook(excel_path)
+        for ws in wb.worksheets:
+            self.autosize_columns(ws)
+            self.center_align(ws)
+        wb.save(excel_path)
     
     def generate_report(self):
-        """Main method to generate all reports."""
-        print("Collecting data...")
+        """Run all report steps."""
         self.collect_data()
-        
-        if not self.data:
-            print("No data found. Please check the input directory structure.")
-            return
-        
-        print(f"Collected {len(self.data)} data points from {len(self.method_groups)} methods.")
-        
-        print("Creating summary report...")
         self.create_summary_report()
-        
-        print("Creating comparison tables...")
         self.create_comparison_tables()
-        
-        print("Creating iteration analysis...")
         self.create_iteration_analysis()
-        
-        print("Generating plots...")
         self.create_plots()
-        
-        print("Creating Excel report...")
         self.create_excel_report()
+        print(f"✅ Report generation completed. Outputs saved in {self.output_dir}")
         
-        print(f"\nAll reports generated successfully in: {self.output_dir}")
-        print("\nGenerated files:")
-        for file in sorted(self.output_dir.iterdir()):
-            print(f"  - {file.name}")
-
 
 def main():
-    parser = argparse.ArgumentParser(
-        description='Consolidate LLM code generation security analysis results'
-    )
-    parser.add_argument(
-        'input_dir',
-        type=str,
-        help='Input directory containing the results'
-    )
-    parser.add_argument(
-        'output_dir',
-        type=str,
-        help='Output directory for consolidated results'
-    )
-    
+    parser = argparse.ArgumentParser(description="Consolidate security metrics and generate reports.")
+    parser.add_argument("--input_dir", required=True, help="Path to input directory containing results.")
+    parser.add_argument("--output_dir", required=True, help="Path to output directory for generated reports.")
     args = parser.parse_args()
-    
+
     consolidator = SecurityMetricsConsolidator(args.input_dir, args.output_dir)
     consolidator.generate_report()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
+
+# python .\scripts\results.py --input_dir .\outputs\ --output_dir .\reports\ 
