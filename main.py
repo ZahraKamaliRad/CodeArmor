@@ -14,6 +14,7 @@ from src.core.planning_few_shot import planning_few_shot_gen_code
 from src.core.persona import persona_gen_code
 from src.config_loader import override_config
 from src.core.planning_rci import planning_rci_gen_code
+from src.core.zero_shot_CoT import zero_shot_cot_gen_code
 
 
 
@@ -62,19 +63,19 @@ def run_naive_secure(dataset: str, file: str, limit: int):
     gen_code(records, dataset, "prefix", limit=limit, output_filename=out)
 
 
-def run_rci(dataset: str, file: str, limit: int, iterations: int):
+def run_rci(dataset: str, file: str, limit: int, iterations: int=1):
     records, out = load_records(dataset, file)
     rci_gen_code(records, dataset, tech("rci", iterations),
                  limit=limit, iterations=iterations, output_filename=out)
 
 
-def run_self_refine(dataset: str, file: str, limit: int, iterations: int):
+def run_self_refine(dataset: str, file: str, limit: int, iterations: int=1):
     records, out = load_records(dataset, file)
     SelfRefine_gen_code(records, dataset, tech("self_refine", iterations),
                         limit=limit, iterations=iterations, output_filename=out)
 
 
-def run_planning_few_shot(dataset: str, file: str, limit: int, iterations: int):
+def run_planning_few_shot(dataset: str, file: str, limit: int, iterations: int=0):
     records, out = load_records(dataset, file)
     planning_few_shot_gen_code(records, dataset, tech("planning_few_shot", iterations),
                           limit=limit, iterations=iterations, output_filename=out)
@@ -89,13 +90,17 @@ def run_cot(dataset: str, file: str, limit: int):
     records, out = load_records(dataset, file)
     cot_gen_code(records, dataset, "cot", limit=limit, output_filename=out)
 
+def run_zero_shot_cot(dataset: str, file: str, limit: int):
+    records, out = load_records(dataset, file)
+    zero_shot_cot_gen_code(records, dataset, "zero_shot_cot", limit=limit, output_filename=out)
+
 
 def run_persona(dataset: str, file: str, limit: int):
     records, out = load_records(dataset, file)
     persona_gen_code(records, dataset, "persona", limit=limit, output_filename=out)
     
 
-def run_planning_rci(dataset: str, file: str, limit: int, iterations: int):
+def run_planning_rci(dataset: str, file: str, limit: int, iterations: int=0):
     records, out = load_records(dataset, file)
     planning_rci_gen_code(records, dataset, tech("planning_rci", iterations),
                           limit=limit, iterations=iterations, output_filename=out)
@@ -111,7 +116,8 @@ dispatch = {
     "one_shot": run_one_shot,
     "cot": run_cot,
     "persona": run_persona,
-    "planning_rci": run_planning_rci
+    "planning_rci": run_planning_rci,
+    "zero_shot_cot": run_zero_shot_cot
 }
 
 
@@ -134,7 +140,7 @@ def main():
                         choices=["securityeval", "llmseceval", "sallm"])
     parser.add_argument("--file", required=True)
     parser.add_argument("--limit", type=int, default=None)
-    parser.add_argument("--iterations", type=int, default=0)
+    parser.add_argument("--iterations", type=int, default=None)
     parser.add_argument("--provider", choices=["api", "local"], required=True)
 
     args = parser.parse_args()
@@ -144,6 +150,15 @@ def main():
     args_dict = vars(args)
 
     func = dispatch[args.mode]
+
+    if args.iterations is None:
+        sig = inspect.signature(func)
+        if "iterations" in sig.parameters:
+            default_iter = sig.parameters["iterations"].default
+            if default_iter is not inspect._empty:
+                args.iterations = default_iter
+
+    args_dict = vars(args)
     smart_call(func, args_dict)
 
 
