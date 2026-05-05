@@ -2,6 +2,8 @@ import json
 import html
 from pathlib import Path
 from datetime import datetime
+import argparse
+from pathlib import Path
 
 SEV_RANK = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
 
@@ -330,6 +332,56 @@ def render_code_with_lines(code: str) -> str:
     inner = "\n".join(f"<span class='code-line'>{esc(l)}</span>" for l in lines)
     return f"<div class='code-wrap'><pre class='code-pre'>{inner}</pre></div>"
 
+def render_iterations(obj: dict) -> str:
+    iterations = obj.get("iterations") or []
+    if not iterations:
+        return ""
+
+    blocks = []
+
+    for it in iterations:
+        r = it.get("round", 0)
+
+        if r < 1:
+            continue
+
+        review = it.get("review") or ""
+
+        code = it.get("improved_code") or it.get("code") or ""
+
+        review_html = ""
+        if review:
+            review_html = f"""
+<details>
+  <summary>Review</summary>
+  <pre style="margin-top:10px;white-space:pre-wrap;line-height:1.35">{esc(review)}</pre>
+</details>
+"""
+
+        blocks.append(f"""
+<div class="card">
+  <div class="subttl">Round {r}</div>
+
+  {review_html}
+
+  <details>
+    <summary>Improved code</summary>
+    {render_code_with_lines(code)}
+  </details>
+</div>
+""")
+
+    if not blocks:
+        return ""
+
+    return f"""
+<details>
+  <summary>Iterations</summary>
+  <div style="margin-top:12px" class="grid">
+    {''.join(blocks)}
+  </div>
+</details>
+"""
 
 def render_item(i: int, obj: dict, langs: set):
     task = obj.get("task") or ""
@@ -337,7 +389,8 @@ def render_item(i: int, obj: dict, langs: set):
     langs.add((lang or "").strip().lower() or "unknown")
     loc = obj.get("loc") or 0
     intent = obj.get("intent") or ""
-    code = obj.get("code") or ""
+    code = obj.get("final_code") or obj.get("code") or ""
+    initial_code = obj.get("initial_code") or ""
 
     bandit_block = obj.get("bandit_result") or {}
     semgrep_block = obj.get("semgrep_result") or {}
@@ -472,23 +525,14 @@ def render_item(i: int, obj: dict, langs: set):
 
   <div style="height:10px"></div>
 
-  <details>
-    <summary>Retrieval Example</summary>
-    <pre style="margin-top:10px;white-space:pre-wrap;overflow-wrap:normal;word-break:normal;line-height:1.35">
-retrieval_example_id: {esc(obj.get("retrieval_example_id") or "")}
+ <details>
+  <summary>Initial generated code</summary>
+  {render_code_with_lines(initial_code)}
+ </details>
 
-retrieval_example_prompt:
-{esc(obj.get("retrieval_example_prompt") or "")}
-    </pre>
-  </details>
+<div style="height:10px"></div>
+{render_iterations(obj)}
 
-  <div style="height:10px"></div>
-
-  <details>
-    <summary>Generated code</summary>
-    {render_code_with_lines(code)}
-  </details>
-  
   <hr/>
 
   <div class="grid">
@@ -568,7 +612,7 @@ def jsonl_to_html(jsonl_path: str, html_path: str):
 
 
 if __name__ == "__main__":
-    import argparse
+
 
     ap = argparse.ArgumentParser()
     ap.add_argument("-i", "--input", required=True, help="input jsonl file")

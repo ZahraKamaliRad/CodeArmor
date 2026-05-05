@@ -9,7 +9,7 @@ Choose the appropriate script based on the prompt engineering method used to gen
 python html_report.py --i <path_to_jsonl>
 ```
 
-### Chain-of-Thought (CoT)  
+### Chain-of-Thought (CoT(Zero or Few_shot))
 ```bash
 python cot_html_report.py --i <path_to_jsonl>
 ```
@@ -17,6 +17,11 @@ python cot_html_report.py --i <path_to_jsonl>
 ### Planning-based
 ```bash
 python planning_html_report.py --i <path_to_jsonl>
+```
+
+### Rci or Self_refie
+```bash
+python RCI_html_report.py --i <path_to_jsonl>
 ```
 
 ## Output
