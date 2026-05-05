@@ -23,6 +23,7 @@ class SecurityMetricsConsolidator:
         self.data = []
         self.method_groups = defaultdict(list)
         self.details_data = []
+        self.runtime_data = []
 
     def parse_metrics_file(self, filepath: Path) -> Dict:
         """Parse a SALLM_metrics.txt file and extract metrics."""
@@ -175,7 +176,7 @@ class SecurityMetricsConsolidator:
                         details_file = method_dir / 'details_result' / 'details_result.xlsx'
                         if details_file.exists():
                             self.collect_details_result(details_file, database, model, method_name, run_num)
-    
+
     def collect_details_result(self, filepath: Path, database: str, model: str, method: str, run_num: int):
         """Collect data from details_result.xlsx files."""
         try:
@@ -185,9 +186,38 @@ class SecurityMetricsConsolidator:
             df['technique'] = method
             df['run_number'] = run_num
             self.details_data.append(df)
+            
+            # Extract runtime information
+            runtime_cols = ['total_runtime', 'llm_time', 'bandit_time', 'semgrep_time',
+                        'avg_runtime_per_task', 'avg_llm_time_per_task', 
+                        'avg_bandit_time_per_task', 'avg_semgrep_time_per_task']
+            
+            runtime_info = {
+                'database': database,
+                'model': model,
+                'method': method,
+                'run_number': run_num
+            }
+            
+            for col in runtime_cols:
+                if col in df.columns:
+                    runtime_info[col] = df[col].iloc[0] if len(df) > 0 else None
+            
+            # Also extract token information - check all possible token columns
+            token_cols = ['total_api_calls', 'prompt_tokens', 'completion_tokens', 
+                        'total_tokens', 'avg_api_calls_per_task',
+                        'avg_prompt_tokens_per_task', 'avg_completion_tokens_per_task',
+                        'avg_total_tokens_per_task']
+            for col in token_cols:
+                if col in df.columns:
+                    runtime_info[col] = df[col].iloc[0] if len(df) > 0 else None
+            
+            self.runtime_data.append(runtime_info)
+            
         except Exception as e:
             print(f"Warning: Could not read {filepath}: {e}")
-    
+          
+            
     def count_decimals(self, value):
         """Count decimal places in a value."""
         try:
@@ -287,6 +317,44 @@ class SecurityMetricsConsolidator:
         
         return summary_df, reduction_df
     
+    def merge_runtime_data(self):
+        """Merge runtime data from details_result.xlsx into self.data."""
+        if not self.runtime_data:
+            return
+        
+        runtime_df = pd.DataFrame(self.runtime_data)
+        
+        for entry in self.data:
+            # Find matching runtime entry
+            match = runtime_df[
+                (runtime_df['database'] == entry['dataset']) &
+                (runtime_df['model'] == entry['model']) &
+                (runtime_df['method'] == entry['method']) &
+                (runtime_df['run_number'] == entry['run_number'])
+            ]
+            
+            if not match.empty:
+                row = match.iloc[0]
+                
+                # Override runtime_seconds with total_runtime from Excel
+                if pd.notna(row.get('total_runtime')):
+                    entry['runtime_seconds'] = row['total_runtime']
+                
+                # Add detailed runtime breakdown
+                for col in ['llm_time', 'bandit_time', 'semgrep_time',
+                        'avg_runtime_per_task', 'avg_llm_time_per_task',
+                        'avg_bandit_time_per_task', 'avg_semgrep_time_per_task']:
+                    if col in row and pd.notna(row[col]):
+                        entry[col] = row[col]
+                
+                # Add token information from Excel (override txt file values if present)
+                for col in ['total_api_calls', 'prompt_tokens', 'completion_tokens',
+                        'total_tokens', 'avg_api_calls_per_task',
+                        'avg_prompt_tokens_per_task', 'avg_completion_tokens_per_task',
+                        'avg_total_tokens_per_task']:
+                    if col in row and pd.notna(row[col]):
+                        entry[col] = row[col]
+    
     def create_summary_report(self):
         """Create a comprehensive summary report."""
         df = pd.DataFrame(self.data)
@@ -349,21 +417,41 @@ class SecurityMetricsConsolidator:
             )
             token_comparison.to_csv(self.output_dir / 'token_usage_comparison.csv')
         
-        # Runtime Comparison
-        if 'runtime_seconds' in df.columns:
+        # Runtime Comparison - Enhanced with detailed breakdown
+        runtime_cols = ['runtime_seconds']
+        detailed_runtime_cols = ['llm_time', 'bandit_time', 'semgrep_time',
+                                'avg_runtime_per_task', 'avg_llm_time_per_task',
+                                'avg_bandit_time_per_task', 'avg_semgrep_time_per_task']
+        
+        available_runtime_cols = [col for col in runtime_cols + detailed_runtime_cols if col in df.columns]
+        
+        if available_runtime_cols:
             runtime_comparison = df.pivot_table(
-                values='runtime_seconds',
+                values=available_runtime_cols,
                 index='method',
                 aggfunc=['mean', 'std', 'min', 'max']
             )
             runtime_comparison.to_csv(self.output_dir / 'runtime_comparison.csv')
+            
+            # Create detailed runtime breakdown
+            if any(col in df.columns for col in detailed_runtime_cols):
+                runtime_breakdown = df.groupby('method')[available_runtime_cols].mean()
+                runtime_breakdown.to_csv(self.output_dir / 'runtime_breakdown.csv')
         
         # Detailed per-run breakdown
-        detailed = df[['method', 'run_number', 'bandit_rate', 'bandit_density', 
-                      'semgrep_rate', 'semgrep_density', 'total_tokens', 'runtime_seconds']]
+        detail_cols = ['method', 'run_number', 'bandit_rate', 'bandit_density', 
+                      'semgrep_rate', 'semgrep_density', 'total_tokens', 'runtime_seconds']
+        
+        # Add detailed runtime columns if available
+        for col in detailed_runtime_cols:
+            if col in df.columns:
+                detail_cols.append(col)
+        
+        available_detail_cols = [col for col in detail_cols if col in df.columns]
+        detailed = df[available_detail_cols]
         detailed = detailed.sort_values(['method', 'run_number'])
         detailed.to_csv(self.output_dir / 'detailed_per_run.csv', index=False)
-    
+            
     def create_iteration_analysis(self):
         """Analyze methods with iterations (rci_iter, self_refine_iter, planning)."""
         df = pd.DataFrame(self.data)
@@ -379,271 +467,476 @@ class SecurityMetricsConsolidator:
         iterative_methods = df[df['iteration'] > 0]
         
         if not iterative_methods.empty:
-            # Group by base method and iteration
-            iter_analysis = iterative_methods.groupby(['base_method', 'iteration']).agg({
-                'bandit_rate': ['mean', 'std'],
-                'bandit_density': ['mean', 'std'],
-                'semgrep_rate': ['mean', 'std'],
-                'semgrep_density': ['mean', 'std'],
-                'total_tokens': ['mean', 'std'],
-                'runtime_seconds': ['mean', 'std']
-            })
-            iter_analysis.to_csv(self.output_dir / 'iteration_analysis.csv')
-    
-    def autosize_columns(self, ws):
-        """Auto-size columns in Excel worksheet."""
-        for column in ws.columns:
-            max_length = 0
-            col = column[0].column
-            for cell in column:
-                if cell.value:
-                    max_length = max(max_length, len(str(cell.value)))
-            ws.column_dimensions[get_column_letter(col)].width = max_length + 2
-    
-    def center_align(self, ws):
-        """Center align all cells in Excel worksheet."""
-        align = Alignment(horizontal="center", vertical="center")
-        for row in ws.iter_rows():
-            for cell in row:
-                cell.alignment = align
-    
-    def create_plots(self):
-        """Generate visualization plots."""
+            # Build aggregation dict dynamically based on available columns
+            agg_dict = {}
+            
+            # Core metrics to check
+            potential_metrics = [
+                'bandit_rate', 'bandit_density', 'semgrep_rate', 'semgrep_density',
+                'total_tokens', 'prompt_tokens', 'completion_tokens',
+                'runtime_seconds', 'llm_time', 'bandit_time', 'semgrep_time',
+                'avg_runtime_per_task', 'avg_llm_time_per_task',
+                'avg_bandit_time_per_task', 'avg_semgrep_time_per_task',
+                'avg_total_tokens_per_task'
+            ]
+            
+            # Only add metrics that exist in the dataframe
+            for metric in potential_metrics:
+                if metric in iterative_methods.columns:
+                    agg_dict[metric] = ['mean', 'std']
+            
+            # Only proceed if we have metrics to aggregate
+            if agg_dict:
+                iter_analysis = iterative_methods.groupby(['base_method', 'iteration']).agg(agg_dict)
+                iter_analysis.to_csv(self.output_dir / 'iteration_analysis.csv')
+                print(f"Created iteration analysis with {len(agg_dict)} metrics")
+            else:
+                print("Warning: No metrics available for iteration analysis")
+                
+    def create_runtime_analysis(self):
+        """Create comprehensive runtime analysis reports and visualizations."""
         df = pd.DataFrame(self.data)
         
         if df.empty:
             return
         
-        sns.set_style("whitegrid")
-        plt.rcParams['figure.figsize'] = (12, 8)
-        
-        # 1. Vulnerability Rate Comparison (Bandit vs Semgrep) - WITH PLANNING HIGHLIGHTED
-        if 'bandit_rate' in df.columns and 'semgrep_rate' in df.columns:
-            fig, ax = plt.subplots(figsize=(14, 8))
-            
-            method_means = df.groupby('method')[['bandit_rate', 'semgrep_rate']].mean()
-            
-            # Create color arrays for highlighting planning
-            colors_bandit = ['#FF6B6B' if method == 'planning' else '#D3D3D3' for method in method_means.index]
-            colors_semgrep = ['#4ECDC4' if method == 'planning' else '#A9A9A9' for method in method_means.index]
-            
-            x = range(len(method_means))
-            width = 0.35
-            
-            ax.bar([i - width/2 for i in x], method_means['bandit_rate'], width, 
-                   label='Bandit', color=colors_bandit)
-            ax.bar([i + width/2 for i in x], method_means['semgrep_rate'], width, 
-                   label='Semgrep', color=colors_semgrep)
-            
-            ax.set_title('Vulnerability Rate by Method (Bandit vs Semgrep)', fontsize=16, fontweight='bold')
-            ax.set_xlabel('Method', fontsize=12)
-            ax.set_ylabel('Vulnerability Rate', fontsize=12)
-            ax.set_xticks(x)
-            ax.set_xticklabels(method_means.index, rotation=45, ha='right')
-            ax.legend(['Bandit', 'Semgrep'], fontsize=10)
-            ax.grid(axis='y', alpha=0.3)
-            plt.tight_layout()
-            plt.savefig(self.output_dir / 'vulnerability_rate_comparison.png', dpi=300)
-            plt.close()
-        
-        # 2. Vulnerability Density Comparison - WITH PLANNING HIGHLIGHTED
-        if 'bandit_density' in df.columns and 'semgrep_density' in df.columns:
-            fig, ax = plt.subplots(figsize=(14, 8))
-            
-            method_means = df.groupby('method')[['bandit_density', 'semgrep_density']].mean()
-            
-            # Create color arrays for highlighting planning
-            colors_bandit = ['#95E1D3' if method == 'planning' else '#D3D3D3' for method in method_means.index]
-            colors_semgrep = ['#F38181' if method == 'planning' else '#A9A9A9' for method in method_means.index]
-            
-            x = range(len(method_means))
-            width = 0.35
-            
-            ax.bar([i - width/2 for i in x], method_means['bandit_density'], width, 
-                   label='Bandit', color=colors_bandit)
-            ax.bar([i + width/2 for i in x], method_means['semgrep_density'], width, 
-                   label='Semgrep', color=colors_semgrep)
-            
-            ax.set_title('Vulnerability Density by Method (Bandit vs Semgrep)', fontsize=16, fontweight='bold')
-            ax.set_xlabel('Method', fontsize=12)
-            ax.set_ylabel('Vulnerability Density (issues/LOC)', fontsize=12)
-            ax.set_xticks(x)
-            ax.set_xticklabels(method_means.index, rotation=45, ha='right')
-            ax.legend(['Bandit', 'Semgrep'], fontsize=10)
-            ax.grid(axis='y', alpha=0.3)
-            plt.tight_layout()
-            plt.savefig(self.output_dir / 'vulnerability_density_comparison.png', dpi=300)
-            plt.close()
-        
-        # 3. Token Usage Comparison
-        if 'total_tokens' in df.columns:
-            fig, ax = plt.subplots(figsize=(14, 8))
-            
-            token_means = df.groupby('method')['total_tokens'].mean().sort_values()
-            token_means.plot(kind='barh', ax=ax, color='#6C5CE7')
-            
-            ax.set_title('Average Token Usage by Method', fontsize=16, fontweight='bold')
-            ax.set_xlabel('Total Tokens', fontsize=12)
-            ax.set_ylabel('Method', fontsize=12)
-            ax.grid(axis='x', alpha=0.3)
-            plt.tight_layout()
-            plt.savefig(self.output_dir / 'token_usage_comparison.png', dpi=300)
-            plt.close()
-        
-        # 4. Runtime Comparison
+        # 1. Overall runtime summary by method
         if 'runtime_seconds' in df.columns:
-            fig, ax = plt.subplots(figsize=(14, 8))
+            runtime_summary = df.groupby('method').agg({
+                'runtime_seconds': ['mean', 'std', 'min', 'max', 'median']
+            })
+            runtime_summary.columns = ['mean', 'std', 'min', 'max', 'median']
+            runtime_summary = runtime_summary.sort_values('mean', ascending=False)
+            runtime_summary.to_csv(self.output_dir / 'runtime_summary.csv')
+        
+        # 2. Runtime component breakdown
+        component_cols = ['llm_time', 'bandit_time', 'semgrep_time']
+        available_components = [col for col in component_cols if col in df.columns]
+        
+        if available_components:
+            component_summary = df.groupby('method')[available_components].mean()
+            component_summary['total'] = component_summary.sum(axis=1)
             
-            runtime_means = df.groupby('method')['runtime_seconds'].mean().sort_values()
-            runtime_means.plot(kind='barh', ax=ax, color='#FD79A8')
+            # Calculate percentages
+            for col in available_components:
+                component_summary[f'{col}_pct'] = (component_summary[col] / component_summary['total'] * 100).round(2)
             
-            ax.set_title('Average Runtime by Method', fontsize=16, fontweight='bold')
-            ax.set_xlabel('Runtime (seconds)', fontsize=12)
-            ax.set_ylabel('Method', fontsize=12)
-            ax.grid(axis='x', alpha=0.3)
+            component_summary.to_csv(self.output_dir / 'runtime_component_breakdown.csv')
+        
+        # 3. Per-task runtime analysis
+        per_task_cols = ['avg_runtime_per_task', 'avg_llm_time_per_task', 
+                        'avg_bandit_time_per_task', 'avg_semgrep_time_per_task']
+        available_per_task = [col for col in per_task_cols if col in df.columns]
+        
+        if available_per_task:
+            per_task_summary = df.groupby('method')[available_per_task].mean()
+            per_task_summary.to_csv(self.output_dir / 'runtime_per_task_analysis.csv')
+        
+        # 4. Runtime efficiency metrics
+        if 'runtime_seconds' in df.columns and 'total_tokens' in df.columns:
+            efficiency = df.groupby('method').agg({
+                'runtime_seconds': 'mean',
+                'total_tokens': 'mean'
+            })
+            efficiency['tokens_per_second'] = (efficiency['total_tokens'] / efficiency['runtime_seconds']).round(2)
+            efficiency['seconds_per_1k_tokens'] = (efficiency['runtime_seconds'] / (efficiency['total_tokens'] / 1000)).round(2)
+            efficiency.to_csv(self.output_dir / 'runtime_efficiency_metrics.csv')
+    def autosize_columns(self, ws):
+        """Auto-size columns in Excel worksheet."""
+        for column in ws.columns:
+            max_length = 0
+            column_letter = get_column_letter(column[0].column)
+            
+            for cell in column:
+                try:
+                    if cell.value:
+                        max_length = max(max_length, len(str(cell.value)))
+                except:
+                    pass
+            
+            adjusted_width = min(max_length + 2, 50)
+            ws.column_dimensions[column_letter].width = adjusted_width
+    
+    def create_visualizations(self):
+        """Create comprehensive visualizations."""
+        df = pd.DataFrame(self.data)
+        
+        if df.empty:
+            return
+        
+        # Set style
+        sns.set_style("whitegrid")
+        plt.rcParams['figure.figsize'] = (14, 8)
+        
+        # 1. Vulnerability Rate Comparison
+        if 'bandit_rate' in df.columns and 'semgrep_rate' in df.columns:
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+            
+            rate_data = df.groupby('method')[['bandit_rate', 'semgrep_rate']].mean()
+            rate_data.plot(kind='bar', ax=ax1)
+            ax1.set_title('Average Vulnerability Rate by Method', fontsize=14, fontweight='bold')
+            ax1.set_xlabel('Method', fontsize=12)
+            ax1.set_ylabel('Vulnerability Rate', fontsize=12)
+            ax1.legend(['Bandit', 'Semgrep'])
+            ax1.tick_params(axis='x', rotation=45)
+            
+            # Density comparison
+            density_data = df.groupby('method')[['bandit_density', 'semgrep_density']].mean()
+            density_data.plot(kind='bar', ax=ax2)
+            ax2.set_title('Average Vulnerability Density by Method', fontsize=14, fontweight='bold')
+            ax2.set_xlabel('Method', fontsize=12)
+            ax2.set_ylabel('Vulnerability Density', fontsize=12)
+            ax2.legend(['Bandit', 'Semgrep'])
+            ax2.tick_params(axis='x', rotation=45)
+            
             plt.tight_layout()
-            plt.savefig(self.output_dir / 'runtime_comparison.png', dpi=300)
+            plt.savefig(self.output_dir / 'vulnerability_comparison.png', dpi=300, bbox_inches='tight')
             plt.close()
         
-        # 5. Iteration Effect Analysis
+                # 2. Token Usage Comparison
+        if 'total_tokens' in df.columns:
+            fig, ax = plt.subplots(figsize=(12, 6))
+            
+            token_data = df.groupby('method')['total_tokens'].mean().sort_values(ascending=False)
+            token_data.plot(kind='bar', ax=ax, color='steelblue')
+            ax.set_title('Average Total Tokens by Method', fontsize=14, fontweight='bold')
+            ax.set_xlabel('Method', fontsize=12)
+            ax.set_ylabel('Total Tokens', fontsize=12)
+            ax.tick_params(axis='x', rotation=45)
+            
+            # Add value labels on bars
+            for i, v in enumerate(token_data):
+                if pd.notna(v):  # Check if value is not NaN
+                    ax.text(i, v, f'{int(v):,}', ha='center', va='bottom')
+            
+            plt.tight_layout()
+            plt.savefig(self.output_dir / 'token_usage.png', dpi=300, bbox_inches='tight')
+            plt.close()
+        
+        # 3. Runtime Comparison
+        if 'runtime_seconds' in df.columns:
+            fig, ax = plt.subplots(figsize=(12, 6))
+            
+            runtime_data = df.groupby('method')['runtime_seconds'].mean().sort_values(ascending=False)
+            runtime_data.plot(kind='bar', ax=ax, color='coral')
+            ax.set_title('Average Runtime by Method', fontsize=14, fontweight='bold')
+            ax.set_xlabel('Method', fontsize=12)
+            ax.set_ylabel('Runtime (seconds)', fontsize=12)
+            ax.tick_params(axis='x', rotation=45)
+            
+            # Add value labels on bars
+            for i, v in enumerate(runtime_data):
+                ax.text(i, v, f'{v:.1f}s', ha='center', va='bottom')
+            
+            plt.tight_layout()
+            plt.savefig(self.output_dir / 'runtime_comparison.png', dpi=300, bbox_inches='tight')
+            plt.close()
+        
+        # 4. Runtime Component Breakdown
+        component_cols = ['llm_time', 'bandit_time', 'semgrep_time']
+        available_components = [col for col in component_cols if col in df.columns]
+        
+        if len(available_components) >= 2:
+            fig, ax = plt.subplots(figsize=(14, 7))
+            
+            component_data = df.groupby('method')[available_components].mean()
+            component_data.plot(kind='bar', stacked=True, ax=ax, 
+                              color=['#3498db', '#e74c3c', '#2ecc71'])
+            ax.set_title('Runtime Component Breakdown by Method', fontsize=14, fontweight='bold')
+            ax.set_xlabel('Method', fontsize=12)
+            ax.set_ylabel('Time (seconds)', fontsize=12)
+            ax.legend(title='Component', labels=['LLM Time', 'Bandit Time', 'Semgrep Time'])
+            ax.tick_params(axis='x', rotation=45)
+            
+            plt.tight_layout()
+            plt.savefig(self.output_dir / 'runtime_components.png', dpi=300, bbox_inches='tight')
+            plt.close()
+        
+        # 5. Iteration Analysis (if applicable)
         df['base_method'] = df['method'].str.replace(r'_iter\d+$', '', regex=True)
         df['iteration'] = df['method'].str.extract(r'_iter(\d+)$').fillna(0).astype(int)
         
-        iterative_df = df[df['iteration'] > 0]
+        iterative_methods = df[df['iteration'] > 0]
         
-        if not iterative_df.empty and 'bandit_rate' in iterative_df.columns:
+        if not iterative_methods.empty and 'bandit_rate' in df.columns:
             fig, axes = plt.subplots(2, 2, figsize=(16, 12))
             
-            for idx, (metric, title) in enumerate([
+            metrics = [
                 ('bandit_rate', 'Bandit Vulnerability Rate'),
-                ('semgrep_rate', 'Semgrep Vulnerability Rate'),
                 ('bandit_density', 'Bandit Vulnerability Density'),
+                ('semgrep_rate', 'Semgrep Vulnerability Rate'),
                 ('semgrep_density', 'Semgrep Vulnerability Density')
-            ]):
-                if metric in iterative_df.columns:
-                    ax = axes[idx // 2, idx % 2]
-                    
-                    for method in iterative_df['base_method'].unique():
-                        method_data = iterative_df[iterative_df['base_method'] == method]
-                        iter_means = method_data.groupby('iteration')[metric].mean()
-                        ax.plot(iter_means.index, iter_means.values, marker='o', label=method, linewidth=2)
-                    
-                    ax.set_title(f'{title} vs Iterations', fontsize=12, fontweight='bold')
-                    ax.set_xlabel('Iteration', fontsize=10)
-                    ax.set_ylabel(metric.replace('_', ' ').title(), fontsize=10)
-                    ax.legend(fontsize=8)
-                    ax.grid(alpha=0.3)
+            ]
+            
+            for idx, (metric, title) in enumerate(metrics):
+                if metric not in iterative_methods.columns:
+                    continue
+                
+                ax = axes[idx // 2, idx % 2]
+                
+                for base_method in iterative_methods['base_method'].unique():
+                    method_data = iterative_methods[iterative_methods['base_method'] == base_method]
+                    iter_means = method_data.groupby('iteration')[metric].mean()
+                    ax.plot(iter_means.index, iter_means.values, marker='o', label=base_method, linewidth=2)
+                
+                ax.set_title(f'{title} by Iteration', fontsize=12, fontweight='bold')
+                ax.set_xlabel('Iteration', fontsize=10)
+                ax.set_ylabel(title, fontsize=10)
+                ax.legend()
+                ax.grid(True, alpha=0.3)
             
             plt.tight_layout()
-            plt.savefig(self.output_dir / 'iteration_effect_analysis.png', dpi=300)
+            plt.savefig(self.output_dir / 'iteration_analysis.png', dpi=300, bbox_inches='tight')
             plt.close()
         
-        # 6. Box Plot for Vulnerability Rate Distribution
-        if 'semgrep_rate' in df.columns:
-            fig, ax = plt.subplots(figsize=(14, 8))
-            sns.boxplot(data=df, x='method', y='semgrep_rate', palette='Set3', ax=ax)
-            ax.set_title('Semgrep Vulnerability Rate Distribution', fontsize=16, fontweight='bold')
-            ax.set_xlabel('Method', fontsize=12)
-            ax.set_ylabel('Semgrep Vulnerability Rate', fontsize=12)
-            plt.xticks(rotation=45)
-            plt.tight_layout()
-            plt.savefig(self.output_dir / 'semgrep_rate_distribution.png', dpi=300)
-            plt.close()
+        # 6. Method Comparison Radar Chart
+        if all(col in df.columns for col in ['bandit_rate', 'semgrep_rate', 'total_tokens', 'runtime_seconds']):
+            methods = df['method'].unique()[:6]  # Limit to 6 methods for clarity
+            
+            if len(methods) > 0:
+                fig, ax = plt.subplots(figsize=(10, 10), subplot_kw=dict(projection='polar'))
+                
+                categories = ['Bandit Rate', 'Semgrep Rate', 'Tokens\n(normalized)', 'Runtime\n(normalized)']
+                N = len(categories)
+                
+                angles = [n / float(N) * 2 * np.pi for n in range(N)]
+                angles += angles[:1]
+                
+                ax.set_theta_offset(np.pi / 2)
+                ax.set_theta_direction(-1)
+                ax.set_xticks(angles[:-1])
+                ax.set_xticklabels(categories)
+                
+                for method in methods:
+                    method_data = df[df['method'] == method]
+                    
+                    # Normalize values (lower is better for all metrics)
+                    values = [
+                        method_data['bandit_rate'].mean(),
+                        method_data['semgrep_rate'].mean(),
+                        method_data['total_tokens'].mean() / df['total_tokens'].max(),
+                        method_data['runtime_seconds'].mean() / df['runtime_seconds'].max()
+                    ]
+                    values += values[:1]
+                    
+                    ax.plot(angles, values, 'o-', linewidth=2, label=method)
+                    ax.fill(angles, values, alpha=0.15)
+                
+                ax.set_ylim(0, 1)
+                ax.legend(loc='upper right', bbox_to_anchor=(1.3, 1.1))
+                ax.set_title('Method Comparison (Normalized Metrics)', fontsize=14, fontweight='bold', pad=20)
+                
+                plt.tight_layout()
+                plt.savefig(self.output_dir / 'method_radar.png', dpi=300, bbox_inches='tight')
+                plt.close()
         
-        # 7. Box Plot for Density Distribution (new requirement)
-        if 'semgrep_density' in df.columns:
-            fig, ax = plt.subplots(figsize=(14, 8))
-            sns.boxplot(data=df, x='method', y='semgrep_density', palette='coolwarm', ax=ax)
-            ax.set_title('Semgrep Vulnerability Density Distribution', fontsize=16, fontweight='bold')
-            ax.set_xlabel('Method', fontsize=12)
-            ax.set_ylabel('Vulnerability Density (Semgrep)', fontsize=12)
-            plt.xticks(rotation=45)
+        # 7. Efficiency Scatter Plot
+        if 'runtime_seconds' in df.columns and 'total_tokens' in df.columns and 'bandit_rate' in df.columns:
+            fig, ax = plt.subplots(figsize=(12, 8))
+            
+            method_summary = df.groupby('method').agg({
+                'runtime_seconds': 'mean',
+                'total_tokens': 'mean',
+                'bandit_rate': 'mean'
+            })
+            
+            scatter = ax.scatter(method_summary['runtime_seconds'], 
+                               method_summary['total_tokens'],
+                               s=method_summary['bandit_rate'] * 5000,
+                               alpha=0.6,
+                               c=range(len(method_summary)),
+                               cmap='viridis')
+            
+            for idx, method in enumerate(method_summary.index):
+                ax.annotate(method, 
+                          (method_summary.loc[method, 'runtime_seconds'],
+                           method_summary.loc[method, 'total_tokens']),
+                          xytext=(5, 5), textcoords='offset points', fontsize=9)
+            
+            ax.set_xlabel('Runtime (seconds)', fontsize=12)
+            ax.set_ylabel('Total Tokens', fontsize=12)
+            ax.set_title('Method Efficiency: Runtime vs Token Usage\n(Bubble size = Bandit Rate)', 
+                        fontsize=14, fontweight='bold')
+            ax.grid(True, alpha=0.3)
+            
             plt.tight_layout()
-            plt.savefig(self.output_dir / 'semgrep_density_distribution.png', dpi=300)
-            plt.close()
-
-        # 8. If reduction data is available, plot density reduction
-        summary_df, reduction_df = self.process_details_data()
-        if reduction_df is not None and not reduction_df.empty:
-            fig, ax = plt.subplots(figsize=(14, 8))
-            sns.barplot(data=reduction_df, x='technique', y='%▼semgrep_density', palette='Purples', ax=ax)
-            ax.set_title('Semgrep Density Reduction Rate by Technique', fontsize=16, fontweight='bold')
-            ax.set_xlabel('Technique', fontsize=12)
-            ax.set_ylabel('% Reduction in Semgrep Density', fontsize=12)
-            plt.xticks(rotation=45)
-            plt.tight_layout()
-            plt.savefig(self.output_dir / 'semgrep_density_reduction.png', dpi=300)
+            plt.savefig(self.output_dir / 'efficiency_scatter.png', dpi=300, bbox_inches='tight')
             plt.close()
     
     def create_excel_report(self):
-        """Compile results into a comprehensive Excel workbook."""
+        """Create a comprehensive Excel report with multiple sheets."""
+        df = pd.DataFrame(self.data)
+        
+        if df.empty:
+            return
+        
         excel_path = self.output_dir / 'comprehensive_report.xlsx'
-        with pd.ExcelWriter(excel_path) as writer:
-            raw_df = pd.DataFrame(self.data)
-            if not raw_df.empty:
-                raw_df.to_excel(writer, index=False, sheet_name='Raw Data')
+        
+        with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
+            # Sheet 1: Raw Data
+            df.to_excel(writer, sheet_name='Raw Data', index=False)
             
-            # Method Summary
-            summary_path = self.output_dir / 'method_summary_flat.csv'
-            if summary_path.exists():
-                summary_df = pd.read_csv(summary_path)
-                summary_df.to_excel(writer, index=False, sheet_name='Method Summary')
+            # Sheet 2: Method Summary
+            summary_cols = ['method', 'bandit_rate', 'bandit_density', 'semgrep_rate', 
+                           'semgrep_density', 'total_tokens', 'runtime_seconds']
+            available_cols = [col for col in summary_cols if col in df.columns]
             
-            # Per Run Details
-            detailed_path = self.output_dir / 'detailed_per_run.csv'
-            if detailed_path.exists():
-                detailed_df = pd.read_csv(detailed_path)
-                detailed_df.to_excel(writer, index=False, sheet_name='Per Run Details')
+            if len(available_cols) > 1:
+                summary = df.groupby('method')[available_cols[1:]].agg(['mean', 'std', 'min', 'max'])
+                summary.to_excel(writer, sheet_name='Method Summary')
             
-            # Iteration Analysis
-            iter_path = self.output_dir / 'iteration_analysis.csv'
-            if iter_path.exists():
-                iter_df = pd.read_csv(iter_path)
-                iter_df.to_excel(writer, index=False, sheet_name='Iteration Analysis')
-            
-            # Rankings (placeholder)
-            if not raw_df.empty:
-                rank_df = raw_df.groupby('method')[['semgrep_rate', 'semgrep_density']].mean().sort_values(
-                    by='semgrep_rate', ascending=True
+            # Sheet 3: Vulnerability Rates
+            if 'bandit_rate' in df.columns and 'semgrep_rate' in df.columns:
+                rate_comparison = df.pivot_table(
+                    values=['bandit_rate', 'semgrep_rate'],
+                    index='method',
+                    aggfunc=['mean', 'std', 'count']
                 )
-                rank_df.to_excel(writer, sheet_name='Rankings')
+                rate_comparison.to_excel(writer, sheet_name='Vulnerability Rates')
             
-            # Details Summary if available
+            # Sheet 4: Token Usage
+            if 'total_tokens' in df.columns:
+                token_comparison = df.pivot_table(
+                    values=['prompt_tokens', 'completion_tokens', 'total_tokens'],
+                    index='method',
+                    aggfunc=['mean', 'std']
+                )
+                token_comparison.to_excel(writer, sheet_name='Token Usage')
+            
+            # Sheet 5: Runtime Analysis
+            if 'runtime_seconds' in df.columns:
+                runtime_comparison = df.pivot_table(
+                    values=['runtime_seconds'],
+                    index='method',
+                    aggfunc=['mean', 'std', 'min', 'max']
+                )
+                runtime_comparison.to_excel(writer, sheet_name='Runtime Analysis')
+            
+            # Sheet 6: Runtime Component Breakdown
+            component_cols = ['llm_time', 'bandit_time', 'semgrep_time']
+            available_components = [col for col in component_cols if col in df.columns]
+            
+            if available_components:
+                component_summary = df.groupby('method')[available_components].mean()
+                component_summary['total'] = component_summary.sum(axis=1)
+                
+                for col in available_components:
+                    component_summary[f'{col}_pct'] = (component_summary[col] / component_summary['total'] * 100).round(2)
+                
+                component_summary.to_excel(writer, sheet_name='Runtime Components')
+            
+            # Sheet 7: Efficiency Metrics
+            if 'runtime_seconds' in df.columns and 'total_tokens' in df.columns:
+                efficiency = df.groupby('method').agg({
+                    'runtime_seconds': 'mean',
+                    'total_tokens': 'mean'
+                })
+                efficiency['tokens_per_second'] = (efficiency['total_tokens'] / efficiency['runtime_seconds']).round(2)
+                efficiency['seconds_per_1k_tokens'] = (efficiency['runtime_seconds'] / (efficiency['total_tokens'] / 1000)).round(2)
+                efficiency.to_excel(writer, sheet_name='Efficiency Metrics')
+            
+            # Sheet 8: Details Summary (from details_result.xlsx)
             summary_df, reduction_df = self.process_details_data()
             if summary_df is not None:
-                summary_df.to_excel(writer, index=False, sheet_name='Details Summary')
-            if reduction_df is not None:
-                reduction_df.to_excel(writer, index=False, sheet_name='Reduction Rates')
+                summary_df.to_excel(writer, sheet_name='Details Summary', index=False)
+            
+            # Sheet 9: Reduction Rates
+            if reduction_df is not None and not reduction_df.empty:
+                reduction_df.to_excel(writer, sheet_name='Reduction Rates', index=False)
+            
+            # Sheet 10: Iteration Analysis
+            df['base_method'] = df['method'].str.replace(r'_iter\d+$', '', regex=True)
+            df['iteration'] = df['method'].str.extract(r'_iter(\d+)$').fillna(0).astype(int)
+            iterative_methods = df[df['iteration'] > 0]
+            
+            if not iterative_methods.empty:
+                agg_dict = {
+                    'bandit_rate': ['mean', 'std'],
+                    'bandit_density': ['mean', 'std'],
+                    'semgrep_rate': ['mean', 'std'],
+                    'semgrep_density': ['mean', 'std'],
+                    'total_tokens': ['mean', 'std'],
+                    'runtime_seconds': ['mean', 'std']
+                }
+                
+                iter_analysis = iterative_methods.groupby(['base_method', 'iteration']).agg(agg_dict)
+                iter_analysis.to_excel(writer, sheet_name='Iteration Analysis')
         
-        # Post-process Excel for formatting
+        # Auto-size columns
         wb = load_workbook(excel_path)
-        for ws in wb.worksheets:
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
             self.autosize_columns(ws)
-            self.center_align(ws)
-        wb.save(excel_path)
-    
-    def generate_report(self):
-        """Run all report steps."""
-        self.collect_data()
-        self.create_summary_report()
-        self.create_comparison_tables()
-        self.create_iteration_analysis()
-        self.create_plots()
-        self.create_excel_report()
-        print(f"✅ Report generation completed. Outputs saved in {self.output_dir}")
+            
+            # Center align headers
+            for cell in ws[1]:
+                cell.alignment = Alignment(horizontal='center', vertical='center')
         
+        wb.save(excel_path)
+        print(f"Comprehensive Excel report saved to: {excel_path}")
+    
+    def run(self):
+        """Execute the complete analysis pipeline."""
+        print("Starting data collection...")
+        self.collect_data()
+        
+        print(f"Collected {len(self.data)} data points from {len(self.method_groups)} methods")
+        
+        if not self.data:
+            print("No data found. Please check the input directory structure.")
+            return
+        
+        print("Merging runtime data from details_result.xlsx...")
+        self.merge_runtime_data()
+        
+        print("Creating summary reports...")
+        self.create_summary_report()
+        
+        print("Creating comparison tables...")
+        self.create_comparison_tables()
+        
+        print("Creating iteration analysis...")
+        self.create_iteration_analysis()
+        
+        print("Creating runtime analysis...")
+        self.create_runtime_analysis()
+        
+        print("Creating visualizations...")
+        self.create_visualizations()
+        
+        print("Creating comprehensive Excel report...")
+        self.create_excel_report()
+        
+        print(f"\nAnalysis complete! Results saved to: {self.output_dir}")
+        print("\nGenerated files:")
+        for file in sorted(self.output_dir.iterdir()):
+            print(f"  - {file.name}")
+
 
 def main():
-    parser = argparse.ArgumentParser(description="Consolidate security metrics and generate reports.")
-    parser.add_argument("--input_dir", required=True, help="Path to input directory containing results.")
-    parser.add_argument("--output_dir", required=True, help="Path to output directory for generated reports.")
+    parser = argparse.ArgumentParser(
+        description='Consolidate and analyze security metrics from SALLM experiments'
+    )
+    parser.add_argument(
+        '--input-dir',
+        type=str,
+        required=True,
+        help='Input directory containing the experiment results'
+    )
+    parser.add_argument(
+        '--output-dir',
+        type=str,
+        default='consolidated_results',
+        help='Output directory for consolidated results (default: consolidated_results)'
+    )
+    
     args = parser.parse_args()
-
+    
     consolidator = SecurityMetricsConsolidator(args.input_dir, args.output_dir)
-    consolidator.generate_report()
+    consolidator.run()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
 
 # python .\scripts\results.py --input_dir .\outputs\ --output_dir .\reports\ 
