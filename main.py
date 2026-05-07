@@ -88,7 +88,7 @@ def run_one_shot(dataset: str, file: str, limit: int):
 
 def run_cot(dataset: str, file: str, limit: int):
     records, out = load_records(dataset, file)
-    cot_gen_code(records, dataset, "cot", limit=limit, output_filename=out)
+    cot_gen_code(records, dataset, "few_shot_cot", limit=limit, output_filename=out)
 
 def run_zero_shot_cot(dataset: str, file: str, limit: int):
     records, out = load_records(dataset, file)
@@ -114,7 +114,7 @@ dispatch = {
     "self_refine": run_self_refine,
     "planning_few_shot": run_planning_few_shot,
     "one_shot": run_one_shot,
-    "cot": run_cot,
+    "few_shot_cot": run_cot,
     "persona": run_persona,
     "planning_rci": run_planning_rci,
     "zero_shot_cot": run_zero_shot_cot

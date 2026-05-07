@@ -50,7 +50,7 @@ def load_refinement_df(csv_path: Path) -> pd.DataFrame:
 
     grouped = (
         df.groupby([TASK_BASE_COL, ANALYZER_COL, ITER_COL], as_index=False)
-        .apply(agg_group)
+        .apply(agg_group,include_groups=False)
         .reset_index(drop=True)
     )
 
