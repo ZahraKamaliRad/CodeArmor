@@ -102,7 +102,13 @@ Rules:
 - Do NOT introduce new vulnerabilities.
 - If an issue is unclear, leave that part unchanged.
 
-Return only raw source code. No explanations. No markdown. """
+Return ONLY the source code.
+Do NOT include:
+- docstrings
+- comments
+- explanations
+- markdown
+"""
 
 
 def extract_plan(text: str) -> str:
