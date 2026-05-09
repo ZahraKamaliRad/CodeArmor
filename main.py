@@ -9,7 +9,7 @@ from src.core.prefix import gen_code
 from src.core.rci import rci_gen_code
 from src.core.self_refine import SelfRefine_gen_code
 from src.core.one_shot import OneShot_gen_code
-from src.core.Few_shot_CoT import cot_gen_code
+from src.core.Few_shot_CoT import few_shot_cot_gen_code
 from src.core.planning_few_shot import planning_few_shot_gen_code
 from src.core.persona import persona_gen_code
 from src.config_loader import override_config
@@ -88,7 +88,7 @@ def run_one_shot(dataset: str, file: str, limit: int):
 
 def run_cot(dataset: str, file: str, limit: int):
     records, out = load_records(dataset, file)
-    cot_gen_code(records, dataset, "few_shot_cot", limit=limit, output_filename=out)
+    few_shot_cot_gen_code(records, dataset, "few_shot_cot", limit=limit, output_filename=out)
 
 def run_zero_shot_cot(dataset: str, file: str, limit: int):
     records, out = load_records(dataset, file)
