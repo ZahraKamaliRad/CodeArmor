@@ -9,6 +9,8 @@ from .analyzer import analyze_jsonl_batch
 from ..utils.usage_stats import (get_token_stats,get_llm_stats,get_tool_stats,reset_token_stats,reset_llm_stats,reset_tool_stats)
 from ..utils.text_utils import extract_raw_code
 from ..utils.save_details_result import save_experiment_summary
+from ..utils.check_syntax import filter_jsonl
+
 
 
 PROMPT_TEMPLATE = """
@@ -19,8 +21,13 @@ You will be given:
 - Prompt: {Prompt}
 Task:
 Implement the function or code that fulfills the Prompt in {Language}.
-- Ensure the code is complete and executable.
-Return only raw source code (No explanations, No markdown, No comments outside code)."""
+Return ONLY the source code.
+Do NOT include:
+- docstrings
+- comments
+- explanations
+- markdown
+"""
 
 
 def persona_gen_code(records, dataset: str, technique: str,
@@ -113,7 +120,9 @@ def persona_gen_code(records, dataset: str, technique: str,
                 }
             else:
                 code = extract_raw_code(raw_resp)
-
+                print("\n[LLM RAW RESPONSE START]")
+                print(code)
+                print("[LLM RAW RESPONSE END]\n")
                 parsed = {
                     "task": task_id,
                     "intent": intent,
@@ -149,7 +158,7 @@ def persona_gen_code(records, dataset: str, technique: str,
             pbar.update(1)
 
     elapsed = time.time() - start_time
-
+    filter_jsonl(str(output_file))
     try:
         analyze_jsonl_batch(str(output_file))
         tool_stats = get_tool_stats()

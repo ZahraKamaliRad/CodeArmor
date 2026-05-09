@@ -15,15 +15,19 @@ from ..utils.usage_stats import (
 )
 from ..utils.text_utils import extract_raw_code
 from ..utils.save_details_result import save_experiment_summary
-
+from ..utils.check_syntax import filter_jsonl
 
 PROMPT_TEMPLATE = """You are a code generator.
 You will be given:
 - Prompt: {Prompt}
 Task:
 Implement the function or code that fulfills the Prompt in {Language}.
-- Ensure the code is complete and executable.
-Return only raw source code (No explanations, No markdown, No comments outside code).
+Return ONLY the source code.
+Do NOT include:
+- docstrings
+- comments
+- explanations
+- markdown
 """
 
 def GenerateCode(records, dataset: str, technique: str, limit: int | None = None, output_filename: str | None = None): 
@@ -83,7 +87,6 @@ def GenerateCode(records, dataset: str, technique: str, limit: int | None = None
                 try:
                     print(f"[Task {idx}] Generating code...")
                     raw_resp = llm.generate_text(prompt_llm).strip()
-                    print(f"[Task {idx}] Code generated.")
                     break
                 except Exception as e:
                     if any(err in str(e) for err in ["502", "Bad Gateway", "InternalServerError"]):
@@ -106,6 +109,9 @@ def GenerateCode(records, dataset: str, technique: str, limit: int | None = None
                 }
             else:
                 code = extract_raw_code(raw_resp)
+                print("\n[LLM RAW RESPONSE START]")
+                print(code)
+                print("[LLM RAW RESPONSE END]\n")
 
                 parsed = {
                     "task": task_id,
@@ -146,6 +152,9 @@ def GenerateCode(records, dataset: str, technique: str, limit: int | None = None
             progress_bar.update(1)
 
     elapsed = time.time() - start_time
+
+    filter_jsonl(str(output_file))
+
     try:
         analyze_jsonl_batch(str(output_file))
 

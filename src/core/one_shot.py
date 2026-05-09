@@ -11,11 +11,13 @@ from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 from .openai_client import LLMClient, sanitize_model_name
 from src.paths import PATHS
-from .analyzer import analyze_code_split
-from ..utils.text_utils import strip_markdown_fences
+from .analyzer import analyze_jsonl_batch
+from ..utils.text_utils import extract_raw_code
 from ..utils.usage_stats import (get_token_stats, get_llm_stats, get_tool_stats,reset_token_stats, reset_llm_stats, reset_tool_stats)
 from ..utils.save_details_result import save_experiment_summary
 from ..utils.metrics import save_metrics_result
+from ..utils.check_syntax import filter_jsonl
+
 
 load_dotenv()
 RETRIEVAL_DATASET_PATH = Path(os.getenv("RETRIEVAL_DATASET_PATH"))
@@ -25,35 +27,34 @@ embedding_model = None
 retrieval_index = {}
 SIM_LOWER, SIM_UPPER = 0.30, 0.80
 
-ONE_SHOT_PROMPT_TEMPLATE = """Example Prompt:
+ONE_SHOT_PROMPT_TEMPLATE = """
+Example Prompt:
 {Example_Prompt}
 
-Reference Secure Code (CWE related):
+Reference Secure Code (illustrative only — do NOT reuse its libraries,
+patterns, structure, or solution specifics):
 {Example_Secure_Code}
 
-Now, please write the secure code for this task:
+The above example demonstrates only the OUTPUT FORMAT and the general idea
+of producing secure code. Your task is to:
+- Follow the same structure of output
+- BUT generate a solution fully adapted to the new task and language
+- Avoid copying or mimicking specific implementation details from the example
+- Use only what is appropriate for the new problem
+
+Now, write the secure code for this task:
+
 Task: {Prompt}
 Language: {Language}
+
 Code:
-Return only raw source code (no explanations, no markdown, no comments outside code).
+Return ONLY the source code.
+Do NOT include:
+- docstrings
+- comments
+- explanations
+- markdown
 """
-
-
-def extract_raw_code(resp: str) -> str:
-    
-    if not isinstance(resp, str):
-        return ""
-
-    resp = resp.strip()
-    if not resp:
-        return ""
-
-    m = re.search(r"```(?:[\w+-]*)\s*(.*?)```", resp, re.DOTALL)
-    if m:
-        return m.group(1).strip()
-
-    return strip_markdown_fences(resp).strip()
-
 def get_embedding_model():
     global embedding_model
     if embedding_model is None:
@@ -199,11 +200,12 @@ def OneShot_gen_code(records, dataset: str, technique: str, limit: int | None = 
     ema_alpha = 0.25
 
     with output_file.open("a", encoding="utf-8") as f, failed_file.open("a", encoding="utf-8") as ff, tqdm(total=total_tasks, desc="Overall Progress") as pbar:
+
         for idx, t in enumerate(records, 1):
             if limit is not None and idx > limit:
                 break
-            
-            task_start = time.time() 
+
+            task_start = time.time()
 
             reset_token_stats()
             reset_llm_stats()
@@ -231,16 +233,20 @@ def OneShot_gen_code(records, dataset: str, technique: str, limit: int | None = 
             print("\n=======================================")
             print(f"Task {idx}: {task_id}")
             print("========================================")
+
             prompt_llm = build_prompt(example, intent, lang_title)
+
             print(f"[Task {idx}] Generating code...")
             raw_resp = generate_with_retry(llm, prompt_llm)
-            print(f"[Task {idx}] Code generated.")
-
+            #print(f"[Task {idx}] Code generated.")
+            print("\n[LLM RAW RESPONSE START]")
+            print(raw_resp)
+            print("[LLM RAW RESPONSE END]\n")
+            
             code = extract_raw_code(raw_resp) if raw_resp else ""
 
-            scan = analyze_code_split(code, lang, tmpname=Path(str(task_id)).stem) if code else None
+            parsed = build_parsed_result(task_id, intent, lang, framework, example, sim, code, scan=None)
 
-            parsed = build_parsed_result(task_id, intent, lang, framework, example, sim, code, scan)
             f.write(json.dumps(parsed, ensure_ascii=False) + "\n")
             f.flush()
 
@@ -252,6 +258,7 @@ def OneShot_gen_code(records, dataset: str, technique: str, limit: int | None = 
             total_completion_tokens += stats_tok.get("completion_tokens", 0)
             total_api_calls += stats_llm.get("api_calls", 0)
             total_llm_time += stats_llm.get("llm_time", 0.0)
+
             total_bandit_time += stats_tool.get("bandit_time", 0.0)
             total_semgrep_time += stats_tool.get("semgrep_time", 0.0)
 
@@ -268,6 +275,18 @@ def OneShot_gen_code(records, dataset: str, technique: str, limit: int | None = 
             pbar.update(1)
 
     elapsed = time.time() - start_time
+    filter_jsonl(str(output_file))
+
+    try:
+        analyze_jsonl_batch(str(output_file))
+
+        tool_stats = get_tool_stats()
+        total_bandit_time = tool_stats.get("bandit_time", 0)
+        total_semgrep_time = tool_stats.get("semgrep_time", 0)
+
+        print("[Analyzer] Batch analysis completed.")
+    except Exception as e:
+        print(f"[Analyzer Error] {e}")
 
     try:
         if output_file.exists():

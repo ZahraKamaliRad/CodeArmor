@@ -1,10 +1,26 @@
 import re
+
 def strip_markdown_fences(s: str) -> str:
     if not isinstance(s, str):
         return s
-    s = re.sub(r"^\s*```[a-zA-Z0-9]*\s*\n", "", s)
-    s = re.sub(r"\n\s*```\s*$", "", s)
+    s = re.sub(r"^\s*```[\w]*\s*\n?", "", s)
+    s = re.sub(r"\n?\s*```\s*$", "", s)
     return s.strip()
+
+def extract_raw_code(resp: str) -> str:
+    if not resp:
+        return ""
+
+    blocks = re.findall(r"```(?:[\w]+)?\s*(.*?)```", resp, re.DOTALL)
+    if blocks:
+        code = "\n\n".join(blocks).strip()
+    else:
+        code = strip_markdown_fences(resp).strip()
+
+    lines = code.splitlines()
+    cleaned_lines = [line for line in lines if not re.match(r'^\s*#.*$', line)]
+    return "\n".join(cleaned_lines).strip()
+
 
 def extract_plan(plan_resp: str) -> dict:
     if not plan_resp:
@@ -14,45 +30,23 @@ def extract_plan(plan_resp: str) -> dict:
 
     match_plan = re.search(r"(?:Plan:|### Plan:)\s*(.*)", text, re.DOTALL | re.IGNORECASE)
     plan = match_plan.group(1).strip() if match_plan else text  
-    return {"plan": plan}
-
-def extract_raw_code(resp: str) -> str:
-    if not resp:
-        return ""
-    m = re.search(r"```(?:[\w]+)?\s*(.*?)```", resp, re.DOTALL)
-    code = m.group(1).strip() if m else strip_markdown_fences(resp).strip()
-    lines = code.splitlines()
-    cleaned_lines = [line for line in lines if not line.strip().startswith("#")]
-    return "\n".join(cleaned_lines).strip()
+    return {"plan": plan} 
 
 
 
-def extract_code_cot(resp: str) -> str:
-    if not isinstance(resp, str):
-        return ""
+import re
 
-    fenced = re.findall(
-        r"```(?:[a-zA-Z0-9_+-]*)\s*(.*?)```",resp,flags=re.DOTALL)
-    if fenced:
-        return fenced[-1].strip()
+def extract_code_few_cot(llm_output: str) -> str:
+    match = re.search(
+        r"###SECURE_CODE_START###\s*(.*?)\s*###SECURE_CODE_END###",
+        llm_output,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if not match:
+        raise ValueError("Could not extract code block from LLM output")
+    code = match.group(1).strip()
+    code = re.sub(r"^```[a-zA-Z]*\n?", "", code)
+    code = re.sub(r"\n?```$", "", code)
 
-    fallback = re.split(
-        r"(Final code:|Final implementation:|Complete code:)",resp,flags=re.IGNORECASE)
-    if len(fallback) > 2:
-        return fallback[-1].strip()
+    return code.strip()
 
-    legacy = re.split(
-        r"Therefore,.*implementation is:",resp,flags=re.IGNORECASE | re.DOTALL)
-    if len(legacy) > 1:
-        return legacy[-1].strip()
-
-    code_like = []
-    for line in resp.splitlines():
-        if (line.strip().startswith(("def ", "class ", "import ", "#include", "{", "}", "for ", "while ", "if "))) or \
-           (";" in line) or ("(" in line and ")" in line):
-            code_like.append(line)
-
-    if code_like:
-        return "\n".join(code_like).strip()
-
-    return ""

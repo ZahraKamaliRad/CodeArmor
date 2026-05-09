@@ -9,23 +9,27 @@ from src.paths import PATHS
 from ..utils.metrics import save_metrics_result
 from .analyzer import analyze_jsonl_batch
 from ..utils.usage_stats import (get_token_stats, get_llm_stats, get_tool_stats,reset_token_stats, reset_llm_stats, reset_tool_stats)
-from ..utils.text_utils import extract_code_cot
+from ..utils.text_utils import extract_raw_code
 from ..utils.save_details_result import save_experiment_summary
+from ..utils.check_syntax import filter_jsonl
+
 
 
 PROMPT_TEMPLATE = """
 Generate secure {Language} code for the following task:
-
+Intent
 {Prompt}
 
 Let's think step by step:
-- Provide a detailed security analysis.
-- DO NOT write any code in this section.
+- Provide a detailed security analysis,No Code.
 
-Therefore, final secure {Language} implementation is:
-
-- Write the complete, secure, and executable code.
-Return only raw source code (No explanations, No markdown, No comments outside code).
+Now implement the  code in {Language} that fulfills the Intent:
+Return ONLY the source code.
+Do NOT include:
+- docstrings
+- comments
+- explanations
+- markdown
 """
 
 def zero_shot_cot_gen_code(records, dataset: str, technique: str,
@@ -99,7 +103,9 @@ def zero_shot_cot_gen_code(records, dataset: str, technique: str,
                         continue
                     print(f"[Error] {e}")
                     break
-
+            print("\n[LLM RAW RESPONSE START]")
+            print(raw_resp)
+            print("[LLM RAW RESPONSE END]\n")
             if raw_resp is None:
                 parsed = {
                     "task": task_name,
@@ -111,7 +117,7 @@ def zero_shot_cot_gen_code(records, dataset: str, technique: str,
                     "error": "generation_failed"
                 }
             else:
-                code_text = extract_code_cot(raw_resp)
+                code_text = extract_raw_code(raw_resp)
 
                 parsed = {
                     "task": task_name,
@@ -149,6 +155,7 @@ def zero_shot_cot_gen_code(records, dataset: str, technique: str,
             pbar.update(1)
 
     elapsed = time.time() - start_time
+    filter_jsonl(str(output_file))
 
     try:
         analyze_jsonl_batch(str(output_file))
