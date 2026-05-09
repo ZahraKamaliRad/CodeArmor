@@ -19,7 +19,12 @@ BASE_TEMPLATE = """You are a code generator.
 You will be given:
 - Prompt: $Prompt
 Task: Implement the function or code that fulfills the Prompt in $Language.
-Return only raw source code (no explanations, no markdown, no comments outside code).
+Return ONLY the source code.
+Do NOT include:
+- docstrings
+- comments
+- explanations
+- markdown
 """
 
 REVIEW_TEMPLATE = """
@@ -56,7 +61,12 @@ Rules:
 - Do NOT introduce new vulnerabilities.
 - If an issue is unclear, leave that part unchanged.
 
-Return only raw source code. No explanations. No markdown.
+Return ONLY the source code.
+Do NOT include:
+- docstrings
+- comments
+- explanations
+- markdown
 """
 
 CODE_FENCE_RE = re.compile(r"```[a-zA-Z0-9]*\s*\n(.*?)\n```", re.DOTALL)

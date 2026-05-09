@@ -332,11 +332,6 @@ def planning_few_shot_gen_code(records, dataset: str, technique: str, limit: int
             raw_plan_response = llm_call_with_retry(
             llm,PLANNING_PROMPT.format(Prompt=intent, Language=lang_title))
             plan = extract_plan(raw_plan_response)
-
-            print("\n[LLM RAW PLAN RESPONSE START]")
-            print(raw_plan_response)
-            print("[LLM RAW PLAN RESPONSE END]\n")
-
             print("\n[EXTRACTED PLAN START]")
             print(plan)
             print("[EXTRACTED PLAN END]\n")
