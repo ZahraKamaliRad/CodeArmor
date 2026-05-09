@@ -13,7 +13,7 @@ from src.core.Few_shot_CoT import few_shot_cot_gen_code
 from src.core.planning_few_shot import planning_few_shot_gen_code
 from src.core.persona import persona_gen_code
 from src.config_loader import override_config
-from src.core.planning_rci import planning_rci_gen_code
+from src.core.planning_zero_shot import planning_rci_gen_code
 from src.core.zero_shot_CoT import zero_shot_cot_gen_code
 
 
@@ -102,7 +102,7 @@ def run_persona(dataset: str, file: str, limit: int):
 
 def run_planning_rci(dataset: str, file: str, limit: int, iterations: int=0):
     records, out = load_records(dataset, file)
-    planning_rci_gen_code(records, dataset, tech("planning_rci", iterations),
+    planning_rci_gen_code(records, dataset, tech("planning_zero_shot", iterations),
                           limit=limit, iterations=iterations, output_filename=out)
 
 
@@ -116,7 +116,7 @@ dispatch = {
     "one_shot": run_one_shot,
     "few_shot_cot": run_cot,
     "persona": run_persona,
-    "planning_rci": run_planning_rci,
+    "planning_zero_shot": run_planning_rci,
     "zero_shot_cot": run_zero_shot_cot
 }
 
