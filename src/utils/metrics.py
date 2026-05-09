@@ -2,7 +2,10 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 import csv
-
+import io
+import ast
+import tokenize
+from typing import Set
 
 CODE_KEYS = ("final_code", "code")
 
@@ -17,10 +20,54 @@ def first_present(d: Dict[str, Any], keys: Iterable[str]):
             return d[k]
     return None
 
+def get_docstring_lines(code: str) -> Set[int]:
+    
+    doc_lines = set()
+    try:
+        tree = ast.parse(code)
+    except Exception:
+        return doc_lines
 
-def count_nonempty_lines(s: str) -> int:
-    return sum(1 for ln in s.splitlines() if ln.strip())
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if not node.body:
+                continue
 
+            first = node.body[0]
+
+            if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant) and isinstance(first.value.value, str):
+                start = first.lineno
+                end = getattr(first, "end_lineno", start + first.value.value.count("\n"))
+                for i in range(start, end + 1):
+                    doc_lines.add(i)
+
+    return doc_lines
+
+
+def count_code_lines(code: str) -> int:
+   
+    docstring_lines = get_docstring_lines(code)
+    code_lines = set()
+
+    try:
+        tokens = tokenize.generate_tokens(io.StringIO(code).readline)
+    except tokenize.TokenError:
+        return 0
+
+    for tok in tokens:
+        tok_type = tok.type
+        line_no = tok.start[0]
+
+        if line_no in docstring_lines:
+            continue
+
+        if tok_type in (tokenize.COMMENT,tokenize.NL,tokenize.NEWLINE,tokenize.INDENT,
+            tokenize.DEDENT,tokenize.ENDMARKER):
+            continue
+
+        code_lines.add(line_no)
+
+    return len(code_lines)
 
 def _issues_to_list(issues: Any) -> List[Any]:
     if issues is None:
@@ -89,11 +136,11 @@ def loc_from(rec: Dict[str, Any]) -> int:
             return max(0, loc)
         code_blob = first_present(ci, CODE_KEYS)
         if isinstance(code_blob, str):
-            return count_nonempty_lines(code_blob)
+            return count_code_lines(code_blob)
 
     code_blob = first_present(rec, CODE_KEYS)
     if isinstance(code_blob, str):
-        return count_nonempty_lines(code_blob)
+        return count_code_lines(code_blob)
 
     return 0
 
