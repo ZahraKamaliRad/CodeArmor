@@ -186,7 +186,9 @@ def refinement_batch(jsonl_path: Path, llm, iteration: int, run_out_dir: Path, t
             code = rec.get("code") or ""
 
             critique = llm_call_with_retry(llm, REVIEW_TEMPLATE.format(CODE=code))
-
+            print("\n[LLM RAW RESPONSE START]")
+            print(critique)
+            print("[LLM RAW RESPONSE END]\n")
             if not critique:
                 completed_tasks += 1
                 pbar.update(1)
@@ -205,7 +207,9 @@ def refinement_batch(jsonl_path: Path, llm, iteration: int, run_out_dir: Path, t
                 continue
 
             improved_code = extract_raw_code(improved_raw)
-
+            print("\n[LLM RAW RESPONSE START]")
+            print(improved_code)
+            print("[LLM RAW RESPONSE END]\n")
             syntax_ok = is_syntax_valid(improved_code)
 
             if "iterations" not in rec:
