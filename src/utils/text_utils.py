@@ -21,18 +21,13 @@ def extract_raw_code(resp: str) -> str:
     cleaned_lines = [line for line in lines if not re.match(r'^\s*#.*$', line)]
     return "\n".join(cleaned_lines).strip()
 
-
-def extract_plan(plan_resp: str) -> dict:
-    if not plan_resp:
-        return {"plan": ""}
-
-    text = re.sub(r"```[\s\S]*?```", "", plan_resp).strip()
-
-    match_plan = re.search(r"(?:Plan:|### Plan:)\s*(.*)", text, re.DOTALL | re.IGNORECASE)
-    plan = match_plan.group(1).strip() if match_plan else text  
-    return {"plan": plan} 
-
-
+def extract_plan(text: str | None) -> str:
+    if not text:
+        return ""
+    m = re.search(r"###PLAN_START###\s*(.*?)\s*###PLAN_END###", text, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    return text.strip()
 
 def extract_code_few_cot(llm_output: str) -> str:
     match = re.search(
@@ -43,5 +38,4 @@ def extract_code_few_cot(llm_output: str) -> str:
     code = match.group(1).strip()
     if not code:
         return ""
-
     return code

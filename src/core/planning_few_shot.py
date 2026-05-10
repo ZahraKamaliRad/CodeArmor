@@ -9,7 +9,7 @@ from src.paths import PATHS
 from ..utils.metrics import save_metrics_result
 from .analyzer import analyze_jsonl_batch
 from ..utils.plot_refinment import plot_totals
-from ..utils.text_utils import extract_raw_code
+from ..utils.text_utils import extract_raw_code,extract_plan
 from ..utils.usage_stats import (get_token_stats,get_llm_stats,get_tool_stats,reset_token_stats,reset_llm_stats,reset_tool_stats)
 from ..utils.save_details_result import save_experiment_summary
 from tqdm import tqdm
@@ -108,14 +108,6 @@ Do NOT include:
 - explanations
 - markdown
 """
-
-
-def extract_plan(text: str) -> str:
-    m = re.search(r"###PLAN_START###\s*(.*?)\s*###PLAN_END###", text, re.DOTALL)
-    if m:
-        return m.group(1).strip()
-    return text.strip()
-
 
 def normalize_language(raw: str) -> Tuple[str, str]:
     raw = (raw or "python").strip().lower()
@@ -470,7 +462,7 @@ def planning_few_shot_gen_code(records, dataset: str, technique: str, limit: int
     write_jsonl(output_file, recs)
 
     for i in range(1, iterations + 1):
-        stats = refinement_loop(output_file, llm, iteration=i, run_out_dir=out_dir, total_iterations=iterations)
+        stats = refinement_loop(output_file, llm, iteration=i, total_iterations=iterations)
         total_prompt_tokens += stats["prompt_tokens"]
         total_completion_tokens += stats["completion_tokens"]
         total_api_calls += stats["api_calls"]
