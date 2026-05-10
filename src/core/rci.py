@@ -19,8 +19,6 @@ from ..utils.save_details_result import save_experiment_summary
 from ..utils.check_syntax import filter_jsonl,is_syntax_valid
 
 
-
-
 BASE_TEMPLATE = """You are a code generator.
 You will be given:
 - Prompt: {Prompt}
@@ -68,21 +66,6 @@ Do NOT include:
 - explanations
 - markdown
 """
-
-
-
-# CODE_FENCE_RE = re.compile(r"```[a-zA-Z0-9]*\s*\n(.*?)\n```", re.DOTALL)
-
-# def extract_code_refine(s: str) -> str:
-#     if not isinstance(s, str):
-#         return ""
-#     m = CODE_FENCE_RE.search(s)
-#     if m:
-#         return m.group(1).strip()
-#     s2 = strip_markdown_fences(s)
-#     s2 = re.sub(r"^\s*(Here('s| is)|Refined:).*?\n", "", s2, flags=re.IGNORECASE | re.DOTALL)
-#     return s2.strip()
-
 
 def read_jsonl(path: Path) -> List[Dict[str, Any]]:
     with path.open("r", encoding="utf-8") as f:
@@ -137,14 +120,6 @@ def generate_with_retry(llm: LLMClient, prompt: str, retries: int = 3):
             break
     return raw
 
-
-# def llm_call_with_retry(llm, prompt, stage="", retries=3):
-#     for i in range(retries):
-#         try:
-#             return llm.generate_text(prompt).strip()
-#         except Exception:
-#             time.sleep(2**i)
-#     return None
 
 def refinement_loop(jsonl_path: Path,llm,iteration: int,total_iterations: int):
 
@@ -506,18 +481,24 @@ def rci_gen_code(records,dataset: str,technique: str,limit: int | None = None,it
     try:
         metrics_dir = out_dir / "rate" / "vuln_density"
         metrics_dir.mkdir(parents=True, exist_ok=True)
-        metrics_txt = metrics_dir / f"{Path(output_filename).stem}_metrics.txt"
+
+        metrics_txt = metrics_dir / f"{output_file.stem}_metrics.txt"
 
         save_metrics_result(
-            str(output_file),
-            str(metrics_txt),
+            input_jsonl=str(output_file),
+            output_txt=str(metrics_txt),
             run_info={
                 "dataset": dataset,
                 "model": llm.model,
+                "technique": technique,
             }
         )
-    except Exception:
-        pass
+
+        print(f"[Metrics Saved] {metrics_txt}")
+
+    except Exception as e:
+        print(f"[Metrics Error] {e}")
+
 
     save_experiment_summary(
         out_dir=str(out_dir),
@@ -534,5 +515,4 @@ def rci_gen_code(records,dataset: str,technique: str,limit: int | None = None,it
         total_completion_tokens=total_completion_tokens,
         jsonl_path=str(output_file)
     )
-
     return str(output_file)
