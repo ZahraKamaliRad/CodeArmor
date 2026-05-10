@@ -29,8 +29,6 @@ def extract_plan(text: str | None) -> str:
         return m.group(1).strip()
     return text.strip()
 
-import re
-
 def extract_code_few_cot(llm_output: str) -> str:
     match = re.search(
         r"###SECURE_CODE_START###\s*(.*?)\s*###SECURE_CODE_END###",
