@@ -690,13 +690,13 @@ class SecurityMetricsConsolidator:
             plt.close()
         
         # 6. Method Comparison Radar Chart
-        if all(col in df.columns for col in ['bandit_rate', 'semgrep_rate', 'total_tokens', 'runtime_seconds']):
+        if all(col in df.columns for col in ['bandit_density', 'semgrep_density', 'total_tokens', 'runtime_seconds']):
             methods = df['method'].unique()[:6]  # Limit to 6 methods for clarity
             
             if len(methods) > 0:
                 fig, ax = plt.subplots(figsize=(10, 10), subplot_kw=dict(projection='polar'))
                 
-                categories = ['Bandit Rate', 'Semgrep Rate', 'Tokens\n(normalized)', 'Runtime\n(normalized)']
+                categories = ['Bandit Density', 'Semgrep Density', 'Tokens\n(normalized)', 'Runtime\n(normalized)']
                 N = len(categories)
                 
                 angles = [n / float(N) * 2 * np.pi for n in range(N)]
@@ -712,8 +712,8 @@ class SecurityMetricsConsolidator:
                     
                     # Normalize values (lower is better for all metrics)
                     values = [
-                        method_data['bandit_rate'].mean(),
-                        method_data['semgrep_rate'].mean(),
+                        method_data['bandit_density'].mean() * 10,
+                        method_data['semgrep_density'].mean() * 10,
                         method_data['total_tokens'].mean() / df['total_tokens'].max(),
                         method_data['runtime_seconds'].mean() / df['runtime_seconds'].max()
                     ]
@@ -731,18 +731,18 @@ class SecurityMetricsConsolidator:
                 plt.close()
         
         # 7. Efficiency Scatter Plot
-        if 'runtime_seconds' in df.columns and 'total_tokens' in df.columns and 'bandit_rate' in df.columns:
+        if 'runtime_seconds' in df.columns and 'total_tokens' in df.columns and 'semgrep_density' in df.columns:
             fig, ax = plt.subplots(figsize=(12, 8))
             
             method_summary = df.groupby('method').agg({
                 'runtime_seconds': 'mean',
                 'total_tokens': 'mean',
-                'bandit_rate': 'mean'
+                'semgrep_density': 'mean'
             })
             
             scatter = ax.scatter(method_summary['runtime_seconds'], 
                                method_summary['total_tokens'],
-                               s=method_summary['bandit_rate'] * 5000,
+                               s=method_summary['semgrep_density'] * 5000,
                                alpha=0.6,
                                c=range(len(method_summary)),
                                cmap='viridis')
@@ -755,7 +755,7 @@ class SecurityMetricsConsolidator:
             
             ax.set_xlabel('Runtime (seconds)', fontsize=12)
             ax.set_ylabel('Total Tokens', fontsize=12)
-            ax.set_title('Method Efficiency: Runtime vs Token Usage\n(Bubble size = Bandit Rate)', 
+            ax.set_title('Method Efficiency: Runtime vs Token Usage\n(Bubble size = Semgrep Density)', 
                         fontsize=14, fontweight='bold')
             ax.grid(True, alpha=0.3)
             
