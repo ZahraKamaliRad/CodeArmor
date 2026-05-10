@@ -7,9 +7,6 @@ sentence-transformers
 scikit-learn
 bandit
 semgrep
-<<<<<<< HEAD
 tqdm
-=======
 openai
 openpyxl
->>>>>>> 64c954cb224554ae1fbc5cee8e0dc4b25d332f4f
