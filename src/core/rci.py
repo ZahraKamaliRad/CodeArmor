@@ -155,6 +155,8 @@ def refinement_loop(
 
     print(f"\n========== Refinement Iteration {iteration}/{total_iterations} ==========")
 
+    invalid_syntax_records = []
+    invalid_count = 0
     records = read_jsonl(jsonl_path)
     total_tasks = len(records)
 
@@ -192,53 +194,57 @@ def refinement_loop(
 
             if not critique:
                 print("[WARN] empty critique")
-                continue
-
-           
-
-            print("[Improve] Improving code...")
-
-            improved_raw = generate_with_retry(
-                llm,
-                IMPROVE_TEMPLATE.format(
-                    CRIT=critique,
-                    CODE=code
-                )
-            )
-
-            if not improved_raw:
-                print("[WARN] empty improved response")
-                continue
-
-            improved_code = extract_raw_code(improved_raw)
-
-            print("\n[LLM RAW IMPROVED CODE START]")
-            print(improved_code)
-            print("[LLM RAW IMPROVED CODE END]\n")
-
-            
-
-            syntax_ok = is_syntax_valid(improved_code)
-
-            if "iterations" not in rec:
-                rec["iterations"] = []
-
-            rec["iterations"].append({
-                "iter": iteration,
-                "review": critique,
-                "improve_code": improved_code,
-                "syntax_valid": syntax_ok
-            })
-
-            if syntax_ok:
-                rec["code"] = improved_code
             else:
-                print(
-                    f"[SKIP] invalid syntax in iteration "
-                    f"{iteration} for task {rec.get('task')}"
+
+                print("[Improve] Improving code...")
+
+                improved_raw = generate_with_retry(
+                    llm,
+                    IMPROVE_TEMPLATE.format(
+                        CRIT=critique,
+                        CODE=code
+                    )
                 )
 
-            
+                if not improved_raw:
+                    print("[WARN] empty improved response")
+                else:
+
+                    improved_code = extract_raw_code(improved_raw)
+
+                    print("\n[LLM RAW IMPROVED CODE START]")
+                    print(improved_code)
+                    print("[LLM RAW IMPROVED CODE END]\n")
+
+                    syntax_ok = is_syntax_valid(improved_code)
+
+                    if "iterations" not in rec:
+                        rec["iterations"] = []
+
+                    rec["iterations"].append({
+                        "iter": iteration,
+                        "review": critique,
+                        "improve_code": improved_code,
+                        "syntax_valid": syntax_ok
+                    })
+
+                    record_snapshot = {
+                        "task": rec.get("task"),
+                        "iter": iteration,
+                        "intent": rec.get("intent"),
+                        "language": rec.get("language"),
+                        "initial_code": rec.get("code"),
+                        "improved_code": improved_code,
+                        "review": critique,
+                        "syntax_valid": syntax_ok
+                    }
+
+                    if syntax_ok:
+                        rec["code"] = improved_code
+                    else:
+                        print(f"[SKIP] invalid syntax in iteration {iteration} for task {rec.get('task')}")
+                        invalid_syntax_records.append(record_snapshot)
+                        invalid_count += 1
 
             t = get_token_stats()
             l = get_llm_stats()
@@ -249,8 +255,6 @@ def refinement_loop(
             iter_api_calls += l.get("api_calls", 0)
             iter_llm_time += l.get("llm_time", 0)
 
-            
-
             completed_tasks += 1
 
             task_elapsed = time.time() - task_start
@@ -258,8 +262,7 @@ def refinement_loop(
             ema_task_time = (
                 task_elapsed
                 if ema_task_time is None
-                else ema_alpha * task_elapsed
-                + (1 - ema_alpha) * ema_task_time
+                else ema_alpha * task_elapsed + (1 - ema_alpha) * ema_task_time
             )
 
             remaining = total_tasks - completed_tasks
@@ -268,16 +271,11 @@ def refinement_loop(
             pbar.set_postfix_str(f"ETA {eta_seconds/60:.1f} min")
             pbar.update(1)
 
-    
     write_jsonl(jsonl_path, records)
 
-    
     filter_jsonl(str(jsonl_path))
 
-    
-
     reset_tool_stats()
-
     analyze_jsonl_batch(str(jsonl_path))
 
     filtered_records = read_jsonl(jsonl_path)
@@ -287,7 +285,6 @@ def refinement_loop(
     iter_bandit_time = tool_stats.get("bandit_time", 0)
     iter_semgrep_time = tool_stats.get("semgrep_time", 0)
 
-    
     for rec in filtered_records:
 
         if rec.get("iterations"):
@@ -300,13 +297,20 @@ def refinement_loop(
 
             rec["iterations"][-1]["analysis"] = analysis_block
 
-            # keep root-level analysis synced
             rec["loc"] = rec.get("loc")
             rec["bandit_result"] = rec.get("bandit_result")
             rec["semgrep_result"] = rec.get("semgrep_result")
 
-   
     write_jsonl(jsonl_path, filtered_records)
+
+    if invalid_syntax_records:
+        invalid_path = jsonl_path.parent / "refinement_syn_invalid.jsonl"
+        write_jsonl(invalid_path, invalid_syntax_records)
+        print(f"[Saved] invalid syntax samples -> {invalid_path}")
+
+    print("\n========== Refinement Summary ==========")
+    print(f"Iteration {iteration}: Invalid syntax count = {invalid_count}")
+    print("========================================\n")
 
     return {
         "prompt_tokens": iter_prompt_tokens,
@@ -504,14 +508,21 @@ def rci_gen_code(records,dataset: str,technique: str,limit: int | None = None,it
 
     print("----------------------------\n")
 
-    save_metrics_result(
-        str(output_file),
-        str(out_dir / "metrics.txt"),
-        run_info={
-            "dataset": dataset,
-            "model": llm.model
-        }
-    )
+    try:
+        metrics_dir = out_dir / "rate" / "vuln_density"
+        metrics_dir.mkdir(parents=True, exist_ok=True)
+        metrics_txt = metrics_dir / f"{Path(output_filename).stem}_metrics.txt"
+
+        save_metrics_result(
+            str(output_file),
+            str(metrics_txt),
+            run_info={
+                "dataset": dataset,
+                "model": llm.model,
+            }
+        )
+    except Exception:
+        pass
 
     save_experiment_summary(
         out_dir=str(out_dir),

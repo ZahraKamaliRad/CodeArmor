@@ -175,6 +175,8 @@ def gen_code(records, dataset: str, technique: str,
                 "model": llm.model,
             }
         )
+    except Exception:
+        pass
 
         print(f"[Metrics] Saved to: {metrics_txt}")
     except Exception as e:

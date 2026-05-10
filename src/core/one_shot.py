@@ -289,10 +289,26 @@ def OneShot_gen_code(records, dataset: str, technique: str, limit: int | None = 
         print(f"[Analyzer Error] {e}")
 
     try:
-        if output_file.exists():
-            save_metrics_result(str(output_file), str(out_dir / "metrics.txt"))
-    except Exception:
-        pass
+        metrics_dir = out_dir / "rate" / "vuln_density"
+        metrics_dir.mkdir(parents=True, exist_ok=True)
+
+        metrics_txt = metrics_dir / f"{output_file.stem}_metrics.txt"
+
+        save_metrics_result(
+            input_jsonl=str(output_file),
+            output_txt=str(metrics_txt),
+            run_info={
+                "dataset": dataset,
+                "model": llm.model,
+                "technique": technique,
+            }
+        )
+
+        print(f"[Metrics Saved] {metrics_txt}")
+
+    except Exception as e:
+        print(f"[Metrics Error] {e}")
+
 
     save_experiment_summary(
         out_dir=str(out_dir),

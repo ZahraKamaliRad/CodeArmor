@@ -159,7 +159,7 @@ def write_jsonl(path: Path, records: List[Dict[str, Any]]):
 
 
 
-def refinement_batch(jsonl_path: Path, llm, iteration: int, run_out_dir: Path, total_iterations: int):
+def refinement_loop(jsonl_path: Path, llm, iteration: int, run_out_dir: Path, total_iterations: int):
     print(f"\n========== Refinement Iteration {iteration}/{total_iterations} ==========")
     records = read_jsonl(jsonl_path)
     total_tasks = len(records)
@@ -406,7 +406,7 @@ def planning_few_shot_gen_code(records, dataset: str, technique: str, limit: int
     write_jsonl(output_file, recs)
 
     for i in range(1, iterations + 1):
-        stats = refinement_batch(output_file, llm, iteration=i, run_out_dir=out_dir, total_iterations=iterations)
+        stats = refinement_loop(output_file, llm, iteration=i, run_out_dir=out_dir, total_iterations=iterations)
         total_prompt_tokens += stats["prompt_tokens"]
         total_completion_tokens += stats["completion_tokens"]
         total_api_calls += stats["api_calls"]
@@ -420,11 +420,21 @@ def planning_few_shot_gen_code(records, dataset: str, technique: str, limit: int
     plots_dir.mkdir(exist_ok=True, parents=True)
     plot_totals(output_file,out=out_dir / "plots" / "Refinment.png")
 
-    save_metrics_result(
-        str(output_file),
-        str(out_dir / "metrics.txt"),
-        run_info={"dataset": dataset, "model": llm.model}
-    )
+    try:
+        metrics_dir = out_dir / "rate" / "vuln_density"
+        metrics_dir.mkdir(parents=True, exist_ok=True)
+        metrics_txt = metrics_dir / f"{Path(output_filename).stem}_metrics.txt"
+
+        save_metrics_result(
+            str(output_file),
+            str(metrics_txt),
+            run_info={
+                "dataset": dataset,
+                "model": llm.model,
+            }
+        )
+    except Exception:
+        pass
 
     save_experiment_summary(
         out_dir=str(out_dir),
