@@ -29,13 +29,18 @@ def extract_plan(text: str | None) -> str:
         return m.group(1).strip()
     return text.strip()
 
+import re
+
 def extract_code_few_cot(llm_output: str) -> str:
     match = re.search(
-        r"###SECURE_CODE_START###\s*```?[a-zA-Z]*\n?(.*?)\n?```?\s*###SECURE_CODE_END###",
-        llm_output,re.DOTALL | re.IGNORECASE)
+        r"###SECURE_CODE_START###\s*(.*?)\s*###SECURE_CODE_END###",
+        llm_output,
+        re.DOTALL | re.IGNORECASE
+    )
     if not match:
         return ""
     code = match.group(1).strip()
-    if not code:
-        return ""
-    return code
+    code = re.sub(r"^```[a-zA-Z]*", "", code)
+    code = re.sub(r"```$", "", code)
+    return code.strip()
+
