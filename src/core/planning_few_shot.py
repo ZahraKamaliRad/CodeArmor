@@ -8,8 +8,7 @@ from .openai_client import LLMClient, sanitize_model_name
 from src.paths import PATHS
 from ..utils.metrics import save_metrics_result
 from .analyzer import analyze_jsonl_batch
-from ..utils.io import csv_log
-from ..utils.plot_refinment import load_refinement_df, plot_totals
+from ..utils.plot_refinment import plot_totals
 from ..utils.text_utils import extract_raw_code
 from ..utils.usage_stats import (get_token_stats,get_llm_stats,get_tool_stats,reset_token_stats,reset_llm_stats,reset_tool_stats)
 from ..utils.save_details_result import save_experiment_summary
@@ -261,23 +260,19 @@ def refinement_batch(jsonl_path: Path, llm, iteration: int, run_out_dir: Path, t
     iter_bandit_time = tool_stats.get("bandit_time", 0)
     iter_semgrep_time = tool_stats.get("semgrep_time", 0)
 
-    for rec in records:
+    for rec in filtered_records:
         task = rec.get("task")
         analyzed = analyzed_by_task.get(task)
 
-        if analyzed:
+        if analyzed and rec.get("iterations"):
             rec["iterations"][-1]["analysis"] = {
                 "loc": analyzed.get("loc"),
                 "bandit_result": analyzed.get("bandit_result"),
                 "semgrep_result": analyzed.get("semgrep_result")
             }
 
-            if "bandit_result" in analyzed:
-                csv_log(run_out_dir, f"{task}#bandit", iteration, rec.get("language"), analyzed["bandit_result"].get("issues"))
-            if "semgrep_result" in analyzed:
-                csv_log(run_out_dir, f"{task}#semgrep", iteration, rec.get("language"), analyzed["semgrep_result"].get("issues"))
+    write_jsonl(jsonl_path, filtered_records)
 
-    write_jsonl(jsonl_path, records)
 
     return {
         "prompt_tokens": iter_prompt_tokens,
@@ -403,11 +398,7 @@ def planning_few_shot_gen_code(records, dataset: str, technique: str, limit: int
             "bandit_result": r.get("bandit_result"),
             "semgrep_result": r.get("semgrep_result"),
         }
-        if "bandit_result" in r:
-            csv_log(out_dir, f"{r['task']}#bandit", 0, r["language"], r["bandit_result"].get("issues"))
-        if "semgrep_result" in r:
-            csv_log(out_dir, f"{r['task']}#semgrep", 0, r["language"], r["semgrep_result"].get("issues"))
-
+        
     write_jsonl(output_file, recs)
 
     for i in range(1, iterations + 1):
@@ -420,13 +411,10 @@ def planning_few_shot_gen_code(records, dataset: str, technique: str, limit: int
         total_semgrep_time += stats["semgrep_time"]
 
     elapsed = time.time() - start_time
-    csv_path = out_dir / "Effect_Of_Refinment.csv"
 
-    if csv_path.exists():
-        df = load_refinement_df(csv_path)
-        plot_totals(csv_path, out=out_dir / "plots" / "Refinment.png", df=df)
-    else:
-        print("[WARN] CSV not found for plotting:", csv_path)
+    plots_dir = out_dir / "plots"
+    plots_dir.mkdir(exist_ok=True, parents=True)
+    plot_totals(output_file,out=out_dir / "plots" / "Refinment.png")
 
     save_metrics_result(
         str(output_file),

@@ -5,13 +5,11 @@ import time
 from pathlib import Path
 from tqdm import tqdm
 from typing import Any, Dict, Tuple, List
-
 from .openai_client import LLMClient, sanitize_model_name
 from src.paths import PATHS
 from ..utils.metrics import save_metrics_result
 from .analyzer import analyze_jsonl_batch
-from ..utils.io import csv_log
-from ..utils.plot_refinment import load_refinement_df, plot_totals
+from ..utils.plot_refinment import plot_totals
 from ..utils.text_utils import  extract_raw_code
 from ..utils.usage_stats import (
     get_token_stats, get_llm_stats, get_tool_stats,
@@ -176,7 +174,9 @@ def refinement_batch(jsonl_path: Path, llm, iteration: int, run_out_dir: Path, t
             code = rec.get("code") or ""
 
             critique = llm_call_with_retry(llm, REVIEW_TEMPLATE.format(CODE=code))
-
+            print("\n[LLM RAW RESPONSE START]")
+            print(critique)
+            print("[LLM RAW RESPONSE END]\n")
             if not critique:
                 completed_tasks += 1
                 pbar.update(1)
@@ -184,17 +184,16 @@ def refinement_batch(jsonl_path: Path, llm, iteration: int, run_out_dir: Path, t
 
             print("Improving code...")
 
-            improved_raw = llm_call_with_retry(
-                llm,
-                IMPROVE_TEMPLATE.format(CRIT=critique, CODE=code)
-            )
-
+            improved_raw = llm_call_with_retry(llm,IMPROVE_TEMPLATE.format(CRIT=critique, CODE=code))
             if not improved_raw:
                 completed_tasks += 1
                 pbar.update(1)
                 continue
 
             improved_code = extract_raw_code(improved_raw)
+            print("\n[LLM RAW RESPONSE START]")
+            print(improved_code)
+            print("[LLM RAW RESPONSE END]\n")
 
             syntax_ok = is_syntax_valid(improved_code)
 
@@ -250,23 +249,18 @@ def refinement_batch(jsonl_path: Path, llm, iteration: int, run_out_dir: Path, t
     iter_bandit_time = tool_stats.get("bandit_time", 0)
     iter_semgrep_time = tool_stats.get("semgrep_time", 0)
 
-    for rec in records:
+    for rec in filtered_records:
         task = rec.get("task")
         analyzed = analyzed_by_task.get(task)
 
-        if analyzed:
+        if analyzed and rec.get("iterations"):
             rec["iterations"][-1]["analysis"] = {
                 "loc": analyzed.get("loc"),
                 "bandit_result": analyzed.get("bandit_result"),
                 "semgrep_result": analyzed.get("semgrep_result")
             }
 
-            if "bandit_result" in analyzed:
-                csv_log(run_out_dir, f"{task}#bandit", iteration, rec.get("language"), analyzed["bandit_result"].get("issues"))
-            if "semgrep_result" in analyzed:
-                csv_log(run_out_dir, f"{task}#semgrep", iteration, rec.get("language"), analyzed["semgrep_result"].get("issues"))
-
-    write_jsonl(jsonl_path, records)
+    write_jsonl(jsonl_path, filtered_records)
 
     return {
         "prompt_tokens": iter_prompt_tokens,
@@ -391,11 +385,7 @@ def planning_rci_gen_code(records, dataset: str, technique: str, limit: int | No
             "bandit_result": r.get("bandit_result"),
             "semgrep_result": r.get("semgrep_result"),
         }
-        if "bandit_result" in r:
-            csv_log(out_dir, f"{r['task']}#bandit", 0, r["language"], r["bandit_result"].get("issues"))
-        if "semgrep_result" in r:
-            csv_log(out_dir, f"{r['task']}#semgrep", 0, r["language"], r["semgrep_result"].get("issues"))
-
+        
     write_jsonl(output_file, recs)
 
     for i in range(1, iterations + 1):
@@ -408,13 +398,21 @@ def planning_rci_gen_code(records, dataset: str, technique: str, limit: int | No
         total_semgrep_time += stats["semgrep_time"]
 
     elapsed = time.time() - start_time
-    csv_path = out_dir / "Effect_Of_Refinment.csv"
+    plots_dir = out_dir / "plots"
+    plots_dir.mkdir(exist_ok=True, parents=True)
 
-    if csv_path.exists():
-        df = load_refinement_df(csv_path)
-        plot_totals(csv_path, out=out_dir / "plots" / "Refinment.png", df=df)
-    else:
-        print("[WARN] CSV not found for plotting:", csv_path)
+    plot_totals(
+        jsonl_path=output_file,
+        out=plots_dir / "Refinement.png"
+    )
+
+
+    print("\n--- DEBUG BEFORE METRICS ---")
+    b2, s2 = count_vulns(read_jsonl(output_file))
+    print("Bandit:", b2)
+    print("Semgrep:", s2)
+    print("----------------------------\n")
+
 
     save_metrics_result(
         str(output_file),
