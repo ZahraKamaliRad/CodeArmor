@@ -125,15 +125,37 @@ def count_vulns(records):
     return bandit_total, semgrep_total
 
 
-def llm_call_with_retry(llm, prompt, stage="", retries=3):
-    for i in range(retries):
+# def llm_call_with_retry(llm, prompt, stage="", retries=3):
+#     for i in range(retries):
+#         try:
+#             return llm.generate_text(prompt).strip()
+#         except Exception:
+#             time.sleep(2**i)
+#     return None
+
+def generate_with_retry(llm: LLMClient, prompt: str, retries: int = 3):
+    raw = None
+    for attempt in range(retries):
         try:
-            return llm.generate_text(prompt).strip()
-        except Exception:
-            time.sleep(2**i)
-    return None
-
-
+            raw = llm.generate_text(prompt).strip()
+            break
+        except Exception as e:
+            msg = str(e)
+            if (
+                "502" in msg
+                or "Bad Gateway" in msg
+                or "InternalServerError" in msg
+                or "LLM parse error" in msg
+                or "timeout" in msg
+                or "overloaded" in msg
+            ):
+                wait = 2 ** attempt
+                print(f"[Warn] transient error. Retrying in {wait}s (attempt {attempt+1}/{retries})...")
+                time.sleep(wait)
+                continue
+            print(f"[Error] {e}")
+            break
+    return raw
 
 def read_jsonl(path: Path) -> List[Dict[str, Any]]:
     with path.open("r", encoding="utf-8") as f:
@@ -147,8 +169,12 @@ def write_jsonl(path: Path, records: List[Dict[str, Any]]):
 
 
 
-def refinement_loop(jsonl_path: Path, llm, iteration: int, run_out_dir: Path, total_iterations: int):
+def refinement_loop(jsonl_path: Path,llm,iteration: int,total_iterations: int):
+
     print(f"\n========== Refinement Iteration {iteration}/{total_iterations} ==========")
+
+    invalid_syntax_records = []
+    invalid_count = 0
     records = read_jsonl(jsonl_path)
     total_tasks = len(records)
 
@@ -162,105 +188,147 @@ def refinement_loop(jsonl_path: Path, llm, iteration: int, run_out_dir: Path, to
     iter_llm_time = 0.0
 
     with tqdm(total=total_tasks, desc=f"Refinement {iteration}/{total_iterations}") as pbar:
+
         for rec in records:
+
             task_start = time.time()
 
             print(f"[Task] {rec.get('task')}")
-            print("Reviewing...")
+            print("[Review] Reviewing code...")
 
             reset_token_stats()
             reset_llm_stats()
 
             code = rec.get("code") or ""
 
-            critique = llm_call_with_retry(llm, REVIEW_TEMPLATE.format(CODE=code))
-            print("\n[LLM RAW RESPONSE START]")
+            critique = generate_with_retry(
+                llm,
+                REVIEW_TEMPLATE.format(CODE=code)
+            )
+
+            print("\n[LLM RAW REVIEW START]")
             print(critique)
-            print("[LLM RAW RESPONSE END]\n")
+            print("[LLM RAW REVIEW END]\n")
+
             if not critique:
-                completed_tasks += 1
-                pbar.update(1)
-                continue
-
-            print("Improving code...")
-
-            improved_raw = llm_call_with_retry(llm,IMPROVE_TEMPLATE.format(CRIT=critique, CODE=code))
-            if not improved_raw:
-                completed_tasks += 1
-                pbar.update(1)
-                continue
-
-            improved_code = extract_raw_code(improved_raw)
-            print("\n[LLM RAW RESPONSE START]")
-            print(improved_code)
-            print("[LLM RAW RESPONSE END]\n")
-
-            syntax_ok = is_syntax_valid(improved_code)
-
-            if "iterations" not in rec:
-                rec["iterations"] = []
-
-            rec["iterations"].append({
-                "iter": iteration,
-                "review": critique,
-                "improve_code": improved_code,
-                "syntax_valid": syntax_ok
-            })
-
-            if syntax_ok:
-                rec["code"] = improved_code
+                print("[WARN] empty critique")
             else:
-                print(f"[SKIP] invalid code in iteration {iteration} for task {rec.get('task')}")
+
+                print("[Improve] Improving code...")
+
+                improved_raw = generate_with_retry(
+                    llm,
+                    IMPROVE_TEMPLATE.format(
+                        CRIT=critique,
+                        CODE=code
+                    )
+                )
+
+                if not improved_raw:
+                    print("[WARN] empty improved response")
+                else:
+
+                    improved_code = extract_raw_code(improved_raw)
+
+                    print("\n[LLM RAW IMPROVED CODE START]")
+                    print(improved_code)
+                    print("[LLM RAW IMPROVED CODE END]\n")
+
+                    syntax_ok = is_syntax_valid(improved_code)
+
+                    if "iterations" not in rec:
+                        rec["iterations"] = []
+
+                    rec["iterations"].append({
+                        "iter": iteration,
+                        "review": critique,
+                        "improve_code": improved_code,
+                        "syntax_valid": syntax_ok
+                    })
+
+                    record_snapshot = {
+                        "task": rec.get("task"),
+                        "iter": iteration,
+                        "intent": rec.get("intent"),
+                        "language": rec.get("language"),
+                        "initial_code": rec.get("code"),
+                        "improved_code": improved_code,
+                        "review": critique,
+                        "syntax_valid": syntax_ok
+                    }
+
+                    if syntax_ok:
+                        rec["code"] = improved_code
+                    else:
+                        print(f"[SKIP] invalid syntax in iteration {iteration} for task {rec.get('task')}")
+                        invalid_syntax_records.append(record_snapshot)
+                        invalid_count += 1
 
             t = get_token_stats()
             l = get_llm_stats()
+
             iter_prompt_tokens += t.get("prompt_tokens", 0)
             iter_completion_tokens += t.get("completion_tokens", 0)
+
             iter_api_calls += l.get("api_calls", 0)
             iter_llm_time += l.get("llm_time", 0)
 
             completed_tasks += 1
 
             task_elapsed = time.time() - task_start
-            ema_task_time = task_elapsed if ema_task_time is None else (
-                ema_alpha * task_elapsed + (1 - ema_alpha) * ema_task_time
+
+            ema_task_time = (
+                task_elapsed
+                if ema_task_time is None
+                else ema_alpha * task_elapsed + (1 - ema_alpha) * ema_task_time
             )
 
             remaining = total_tasks - completed_tasks
             eta_seconds = ema_task_time * remaining
+
             pbar.set_postfix_str(f"ETA {eta_seconds/60:.1f} min")
             pbar.update(1)
 
-    
     write_jsonl(jsonl_path, records)
 
-   
-    reset_tool_stats()
-    filter_jsonl(str(jsonl_path))   
+    filter_jsonl(str(jsonl_path))
 
-   
+    reset_tool_stats()
     analyze_jsonl_batch(str(jsonl_path))
+
     filtered_records = read_jsonl(jsonl_path)
 
-    
-    analyzed_by_task = {r["task"]: r for r in filtered_records}
-
     tool_stats = get_tool_stats()
+
     iter_bandit_time = tool_stats.get("bandit_time", 0)
     iter_semgrep_time = tool_stats.get("semgrep_time", 0)
 
     for rec in filtered_records:
-        task = rec.get("task")
-        analyzed = analyzed_by_task.get(task)
 
-        if analyzed and rec.get("iterations"):
-            rec["iterations"][-1]["analysis"] = {
-                "loc": analyzed.get("loc"),
-                "bandit_result": analyzed.get("bandit_result"),
-                "semgrep_result": analyzed.get("semgrep_result")
+        if rec.get("iterations"):
+
+            analysis_block = {
+                "loc": rec.get("loc"),
+                "bandit_result": rec.get("bandit_result"),
+                "semgrep_result": rec.get("semgrep_result")
             }
 
+            rec["iterations"][-1]["analysis"] = analysis_block
+
+            rec["loc"] = rec.get("loc")
+            rec["bandit_result"] = rec.get("bandit_result")
+            rec["semgrep_result"] = rec.get("semgrep_result")
+
     write_jsonl(jsonl_path, filtered_records)
+
+    if invalid_syntax_records:
+        invalid_path = jsonl_path.parent / "refinement_syn_invalid.jsonl"
+        write_jsonl(invalid_path, invalid_syntax_records)
+        print(f"[Saved] invalid syntax samples -> {invalid_path}")
+
+    print("\n========== Refinement Summary ==========")
+    print(f"Iteration {iteration}: Invalid syntax count = {invalid_count}")
+    print("========================================\n")
 
     return {
         "prompt_tokens": iter_prompt_tokens,
@@ -312,7 +380,7 @@ def planning_rci_gen_code(records, dataset: str, technique: str, limit: int | No
             print(f"\n========== Task {idx}: {task} ==========")
             print("[Stage] Planning...")
 
-            raw_plan_response = llm_call_with_retry(
+            raw_plan_response = generate_with_retry(
             llm,PLANNING_PROMPT.format(Prompt=intent, Language=lang_title))
             plan = extract_plan(raw_plan_response)
             print("\n[EXTRACTED PLAN START]")
@@ -320,7 +388,7 @@ def planning_rci_gen_code(records, dataset: str, technique: str, limit: int | No
             print("[EXTRACTED PLAN END]\n")
 
             code = extract_raw_code(
-                llm_call_with_retry(llm, CODING_PROMPT.format(Prompt=intent, Language=lang_title, Plan=plan))
+                generate_with_retry(llm, CODING_PROMPT.format(Prompt=intent, Language=lang_title, Plan=plan))
             )
             print("\n[LLM RAW RESPONSE START]")
             print(code)

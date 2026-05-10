@@ -146,12 +146,7 @@ def generate_with_retry(llm: LLMClient, prompt: str, retries: int = 3):
 #             time.sleep(2**i)
 #     return None
 
-def refinement_loop(
-    jsonl_path: Path,
-    llm,
-    iteration: int,
-    total_iterations: int
-):
+def refinement_loop(jsonl_path: Path,llm,iteration: int,total_iterations: int):
 
     print(f"\n========== Refinement Iteration {iteration}/{total_iterations} ==========")
 
