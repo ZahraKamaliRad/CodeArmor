@@ -480,20 +480,17 @@ def planning_few_shot_gen_code(records, dataset: str, technique: str, limit: int
         metrics_dir = out_dir / "rate" / "vuln_density"
         metrics_dir.mkdir(parents=True, exist_ok=True)
         metrics_txt = metrics_dir / f"{output_file.stem}_metrics.txt"
-
         save_metrics_result(
-            input_jsonl=str(output_file),
-            output_txt=str(metrics_txt),
+            str(output_file),
+            str(metrics_txt),
             run_info={
                 "dataset": dataset,
-                "model": llm.model,
-                "technique": technique,
+                "model": llm.model
             }
         )
         print(f"[Metrics Saved] {metrics_txt}")
     except Exception as e:
-        print(f"[Metrics Error] {e}")
-
+        print(f"[metrics-save] Error: {e}")
 
     save_experiment_summary(
         out_dir=str(out_dir),

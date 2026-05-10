@@ -218,16 +218,18 @@ def few_shot_cot_gen_code(records, dataset: str, technique: str,
     try:
         metrics_dir = out_dir / "rate" / "vuln_density"
         metrics_dir.mkdir(parents=True, exist_ok=True)
-        metrics_txt = metrics_dir / f"{Path(output_filename).stem}_metrics.txt"
-
+        metrics_txt = metrics_dir / f"{output_file.stem}_metrics.txt"
         save_metrics_result(
             str(output_file),
             str(metrics_txt),
-            run_info={"dataset": dataset, "model": llm.model}
+            run_info={
+                "dataset": dataset,
+                "model": llm.model
+            }
         )
         print(f"[Metrics Saved] {metrics_txt}")
     except Exception as e:
-        print(f"[metrics-save] {e}")
+        print(f"[metrics-save] Error: {e}")
 
     save_experiment_summary(
         out_dir=str(out_dir),
