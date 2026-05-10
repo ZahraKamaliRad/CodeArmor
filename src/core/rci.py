@@ -1,16 +1,24 @@
 from __future__ import annotations
-import json, re, time
+import json
+import re
+import time
 from pathlib import Path
-from .openai_client import LLMClient, sanitize_model_name
-from .analyzer import analyze_code_split
-from src.paths import PATHS
-from ..utils.io import csv_log
-from ..utils.metrics import save_metrics_result
-from ..utils.plot_refinment import load_refinement_df, plot_totals
-from ..utils.text_utils import strip_markdown_fences
-from ..utils.usage_stats import (get_token_stats,get_llm_stats,get_tool_stats,reset_token_stats,reset_llm_stats,reset_tool_stats)
-from ..utils.save_details_result import save_experiment_summary
 from tqdm import tqdm
+from typing import Any, Dict, Tuple, List
+from .openai_client import LLMClient, sanitize_model_name
+from src.paths import PATHS
+from ..utils.metrics import save_metrics_result
+from .analyzer import analyze_jsonl_batch
+from ..utils.plot_refinment import plot_totals
+from ..utils.text_utils import  extract_raw_code
+from ..utils.usage_stats import (
+    get_token_stats, get_llm_stats, get_tool_stats,
+    reset_token_stats, reset_llm_stats, reset_tool_stats
+)
+from ..utils.save_details_result import save_experiment_summary
+from ..utils.check_syntax import filter_jsonl,is_syntax_valid
+
+
 
 
 BASE_TEMPLATE = """You are a code generator.
@@ -63,59 +71,47 @@ Do NOT include:
 
 
 
-CODE_FENCE_RE = re.compile(r"```[a-zA-Z0-9]*\s*\n(.*?)\n```", re.DOTALL)
+# CODE_FENCE_RE = re.compile(r"```[a-zA-Z0-9]*\s*\n(.*?)\n```", re.DOTALL)
 
-def extract_code_refine(s: str) -> str:
-    if not isinstance(s, str):
-        return ""
-    m = CODE_FENCE_RE.search(s)
-    if m:
-        return m.group(1).strip()
-    s2 = strip_markdown_fences(s)
-    s2 = re.sub(r"^\s*(Here('s| is)|Refined:).*?\n", "", s2, flags=re.IGNORECASE | re.DOTALL)
-    return s2.strip()
+# def extract_code_refine(s: str) -> str:
+#     if not isinstance(s, str):
+#         return ""
+#     m = CODE_FENCE_RE.search(s)
+#     if m:
+#         return m.group(1).strip()
+#     s2 = strip_markdown_fences(s)
+#     s2 = re.sub(r"^\s*(Here('s| is)|Refined:).*?\n", "", s2, flags=re.IGNORECASE | re.DOTALL)
+#     return s2.strip()
 
 
-def run_two_analyzers(code: str, lang: str, tmpname: str = "snippet") -> dict:
-    scan = analyze_code_split(code, lang, tmpname=tmpname) or {}
+def read_jsonl(path: Path) -> List[Dict[str, Any]]:
+    with path.open("r", encoding="utf-8") as f:
+        return [json.loads(l) for l in f if l.strip()]
 
-    result = {}
-    result["loc"] = int(scan.get("loc") or 0)
 
-    bandit_secure = True
-    semgrep_secure = True
+def write_jsonl(path: Path, records: List[Dict[str, Any]]):
+    with path.open("w", encoding="utf-8") as f:
+        for r in records:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
-    if "bandit_result" in scan:
-        bandit_block = scan["bandit_result"]
-        bandit_issues = bandit_block.get("issues") or []
-        bandit_secure = bool(bandit_block.get("secure", len(bandit_issues) == 0))
+def normalize_language(raw: str) -> Tuple[str, str]:
+    raw = (raw or "python").strip().lower()
+    if raw.startswith("py"):
+        return "Python", "python"
+    return raw.capitalize(), raw
 
-        result["bandit_result"] = {
-            "secure": bandit_secure,
-            "issues": bandit_issues,
-            "summary": bandit_block.get("summary") or {},
-        }
+def count_vulns(records):
+    bandit_total = 0
+    semgrep_total = 0
 
-    if "semgrep_result" in scan:
-        semgrep_block = scan["semgrep_result"]
-        semgrep_issues = semgrep_block.get("issues") or []
-        semgrep_secure = bool(semgrep_block.get("secure", len(semgrep_issues) == 0))
+    for r in records:
+        if r.get("bandit_result"):
+            bandit_total += len(r["bandit_result"].get("issues") or [])
 
-        result["semgrep_result"] = {
-            "secure": semgrep_secure,
-            "issues": semgrep_issues,
-            "summary": semgrep_block.get("summary") or {},
-        }
+        if r.get("semgrep_result"):
+            semgrep_total += len(r["semgrep_result"].get("issues") or [])
 
-    result["secure"] = bool(bandit_secure and semgrep_secure)
-
-    return result
-
-def log_two_lines(run_out_dir: str, task_id: str, iter_idx: int, lang: str, scan: dict):
-    b_issues = (scan.get("bandit_result") or {}).get("issues") or []
-    s_issues = (scan.get("semgrep_result") or {}).get("issues") or []
-    csv_log(run_out_dir=run_out_dir, task_id=f"{task_id}#bandit", iter_idx=iter_idx, language=lang, issues=b_issues)
-    csv_log(run_out_dir=run_out_dir, task_id=f"{task_id}#semgrep", iter_idx=iter_idx, language=lang, issues=s_issues)
+    return bandit_total, semgrep_total
 
 def generate_with_retry(llm: LLMClient, prompt: str, retries: int = 3):
     raw = None
@@ -141,95 +137,220 @@ def generate_with_retry(llm: LLMClient, prompt: str, retries: int = 3):
             break
     return raw
 
-def refinment_loop(llm,initial_code: str,lang: str,task_id: str,tmpname: str,iterations: int,run_out_dir: str):
-    current_code = initial_code
-    history = []
+
+# def llm_call_with_retry(llm, prompt, stage="", retries=3):
+#     for i in range(retries):
+#         try:
+#             return llm.generate_text(prompt).strip()
+#         except Exception:
+#             time.sleep(2**i)
+#     return None
+
+def refinement_loop(
+    jsonl_path: Path,
+    llm,
+    iteration: int,
+    total_iterations: int
+):
+
+    print(f"\n========== Refinement Iteration {iteration}/{total_iterations} ==========")
+
+    records = read_jsonl(jsonl_path)
+    total_tasks = len(records)
+
+    ema_task_time = None
+    ema_alpha = 0.25
+    completed_tasks = 0
+
+    iter_prompt_tokens = 0
+    iter_completion_tokens = 0
+    iter_api_calls = 0
+    iter_llm_time = 0.0
+
+    with tqdm(total=total_tasks, desc=f"Refinement {iteration}/{total_iterations}") as pbar:
+
+        for rec in records:
+
+            task_start = time.time()
+
+            print(f"[Task] {rec.get('task')}")
+            print("[Review] Reviewing code...")
+
+            reset_token_stats()
+            reset_llm_stats()
+
+            code = rec.get("code") or ""
+
+            critique = generate_with_retry(
+                llm,
+                REVIEW_TEMPLATE.format(CODE=code)
+            )
+
+            print("\n[LLM RAW REVIEW START]")
+            print(critique)
+            print("[LLM RAW REVIEW END]\n")
+
+            if not critique:
+                print("[WARN] empty critique")
+                continue
+
+           
+
+            print("[Improve] Improving code...")
+
+            improved_raw = generate_with_retry(
+                llm,
+                IMPROVE_TEMPLATE.format(
+                    CRIT=critique,
+                    CODE=code
+                )
+            )
+
+            if not improved_raw:
+                print("[WARN] empty improved response")
+                continue
+
+            improved_code = extract_raw_code(improved_raw)
+
+            print("\n[LLM RAW IMPROVED CODE START]")
+            print(improved_code)
+            print("[LLM RAW IMPROVED CODE END]\n")
+
+            
+
+            syntax_ok = is_syntax_valid(improved_code)
+
+            if "iterations" not in rec:
+                rec["iterations"] = []
+
+            rec["iterations"].append({
+                "iter": iteration,
+                "review": critique,
+                "improve_code": improved_code,
+                "syntax_valid": syntax_ok
+            })
+
+            if syntax_ok:
+                rec["code"] = improved_code
+            else:
+                print(
+                    f"[SKIP] invalid syntax in iteration "
+                    f"{iteration} for task {rec.get('task')}"
+                )
+
+            
+
+            t = get_token_stats()
+            l = get_llm_stats()
+
+            iter_prompt_tokens += t.get("prompt_tokens", 0)
+            iter_completion_tokens += t.get("completion_tokens", 0)
+
+            iter_api_calls += l.get("api_calls", 0)
+            iter_llm_time += l.get("llm_time", 0)
+
+            
+
+            completed_tasks += 1
+
+            task_elapsed = time.time() - task_start
+
+            ema_task_time = (
+                task_elapsed
+                if ema_task_time is None
+                else ema_alpha * task_elapsed
+                + (1 - ema_alpha) * ema_task_time
+            )
+
+            remaining = total_tasks - completed_tasks
+            eta_seconds = ema_task_time * remaining
+
+            pbar.set_postfix_str(f"ETA {eta_seconds/60:.1f} min")
+            pbar.update(1)
+
     
-    print("[analysis] Running analyzers (iter=0)...")
-    scan0 = run_two_analyzers(initial_code, lang, tmpname=tmpname)
-    log_two_lines(run_out_dir, str(task_id), 0, lang, scan0)
+    write_jsonl(jsonl_path, records)
 
-    history.append({
-        "round": 0,
-        "review": None,
-        "improved_code": initial_code,
-        "loc": int(scan0.get("loc") or 0),
-        "secure": bool(scan0.get("secure")),
-        **{k: scan0[k] for k in ["bandit_result", "semgrep_result"] if k in scan0}
-    })
+    
+    filter_jsonl(str(jsonl_path))
 
-    print("[Refinement] Starting loop...")
-    for i in range(1, int(iterations) + 1):
+    
 
-        print(f"[Refinement] Iteration {i}/{iterations}")
+    reset_tool_stats()
 
-        critique = generate_with_retry(llm,REVIEW_TEMPLATE.format(CODE=current_code))
+    analyze_jsonl_batch(str(jsonl_path))
 
-        if critique is None:
-            break
+    filtered_records = read_jsonl(jsonl_path)
 
-        improved_raw = generate_with_retry(llm,IMPROVE_TEMPLATE.format(CRIT=critique, CODE=current_code))
+    tool_stats = get_tool_stats()
 
-        if improved_raw is None:
-            break
+    iter_bandit_time = tool_stats.get("bandit_time", 0)
+    iter_semgrep_time = tool_stats.get("semgrep_time", 0)
 
-        improved_code = extract_code(improved_raw)
+    
+    for rec in filtered_records:
 
-        print(f"[analysis] Running analyzers {i}/{iterations}")
+        if rec.get("iterations"):
 
-        scan_i = run_two_analyzers(improved_code, lang, tmpname=tmpname)
-        log_two_lines(run_out_dir, str(task_id), i, lang, scan_i)
+            analysis_block = {
+                "loc": rec.get("loc"),
+                "bandit_result": rec.get("bandit_result"),
+                "semgrep_result": rec.get("semgrep_result")
+            }
 
-        history.append({
-            "round": i,
-            "review": critique,
-            "improved_code": improved_code,
-            "loc": int(scan_i.get("loc") or 0),
-            "secure": bool(scan_i.get("secure")),
-            **{k: scan_i[k] for k in ["bandit_result", "semgrep_result"] if k in scan_i}
-        })
+            rec["iterations"][-1]["analysis"] = analysis_block
 
-        current_code = improved_code
+            # keep root-level analysis synced
+            rec["loc"] = rec.get("loc")
+            rec["bandit_result"] = rec.get("bandit_result")
+            rec["semgrep_result"] = rec.get("semgrep_result")
 
-    return current_code, history
+   
+    write_jsonl(jsonl_path, filtered_records)
 
+    return {
+        "prompt_tokens": iter_prompt_tokens,
+        "completion_tokens": iter_completion_tokens,
+        "api_calls": iter_api_calls,
+        "llm_time": iter_llm_time,
+        "bandit_time": iter_bandit_time,
+        "semgrep_time": iter_semgrep_time,
+    }
 
-
-def rci_gen_code(records,dataset: str,technique: str,limit: int | None = None,
-                 iterations: int = 1,output_filename: str | None = None):
+def rci_gen_code(records,dataset: str,technique: str,limit: int | None = None,iterations: int = 0,
+    output_filename: str | None = None) -> str:
 
     start_time = time.time()
+
     llm = LLMClient()
     model_tag = sanitize_model_name(llm.model)
+
+    out_dir = PATHS.run_dir(dataset, model_tag, technique)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    output_file = out_dir / (output_filename or f"{dataset}.jsonl")
+
     total_prompt_tokens = 0
     total_completion_tokens = 0
     total_api_calls = 0
     total_llm_time = 0.0
     total_bandit_time = 0.0
     total_semgrep_time = 0.0
-    executed_tasks = 0
 
-    out_dir = PATHS.run_dir(dataset=dataset, model_name=model_tag, technique=technique)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    generated = []
 
-    if output_filename is None:
-        output_filename = f"{dataset}.jsonl"
-
-    output_file = out_dir / output_filename
-    run_out_dir = str(out_dir)
-
-    total_records = len(records)
-    if limit is not None:
-        total_tasks = min(total_records, limit)
-    else:
-        total_tasks = total_records
+    total_tasks = len(records) if limit is None else min(len(records), limit)
 
     ema_task_time = None
     ema_alpha = 0.25
+    completed_tasks = 0
 
-    with output_file.open("a", encoding="utf-8") as f, tqdm(total=total_tasks, desc="Overall Progress") as pbar:
+    with tqdm(total=total_tasks, desc="Generation Stage") as pbar:
 
         for idx, t in enumerate(records, 1):
+
+            if limit and idx > limit:
+                break
 
             task_start = time.time()
 
@@ -237,159 +358,175 @@ def rci_gen_code(records,dataset: str,technique: str,limit: int | None = None,
             reset_llm_stats()
             reset_tool_stats()
 
-            if limit is not None and idx > limit:
-                break
+            lang_title, lang_key = normalize_language(t.get("language"))
 
-            lang_raw = (t.get("language") or "python").strip().lower()
-            if lang_raw.startswith("py"):
-                lang_title = "Python"
-                lang_key = "python"
-            else:
-                lang_title = lang_raw.capitalize()
-                lang_key = lang_raw
+            task = t.get("ID") or f"task_{idx}"
+            intent = t.get("Prompt", "")
 
-            task_id = t.get("ID")
-            intent = t.get("Prompt", "") or ""
-            tmpname = Path(str(task_id or "snippet")).stem
+            print(f"\n========== Task {idx}: {task} ==========")
+            print("[Stage] Initial Code Generation...")
 
-            print("\n=======================================")
-            print(f"Task {idx}: {task_id}")
-            print("=======================================")
-
-            print("[Coding] Generating code...")
-            base_prompt = BASE_TEMPLATE.format(Prompt=intent, Language=lang_title)
-            raw_initial = generate_with_retry(llm, base_prompt)
-
-            if raw_initial is None:
-                print("[Coding] Generation failed.")
-
-                parsed = {
-                    "task": task_id,
-                    "intent": intent,
-                    "language": lang_key,
-                    "framework": t.get("framework"),
-                    "technique": technique,
-                    "rci_iterations": int(iterations),
-                    "iterations": [],
-                    "initial_code": "",
-                    "final_code": "",
-                    "error": "generation_failed",
-                    "loc": 0,
-                    "secure": False,
-                }
-
-                f.write(json.dumps(parsed, ensure_ascii=False) + "\n")
-                f.flush()
-
-            else:
-                print("[Coding] Code generated.")
-
-                initial_code = extract_code(raw_initial)
-
-                final_code, history = refinment_loop(
-                    llm=llm,
-                    initial_code=initial_code,
-                    lang=lang_key,
-                    task_id=task_id,
-                    tmpname=tmpname,
-                    iterations=iterations,
-                    run_out_dir=run_out_dir,
+            raw_initial = generate_with_retry(
+                llm,
+                BASE_TEMPLATE.format(
+                    Prompt=intent,
+                    Language=lang_title
                 )
+            )
 
-                print("[Refinement] Finished.")
+            if not raw_initial:
 
-                last_iter = history[-1]
+                print(f"[ERROR] generation failed for task {task}")
 
-                parsed = {
-                    "task": task_id,
+                generated.append({
+                    "task": task,
                     "intent": intent,
                     "language": lang_key,
                     "framework": t.get("framework"),
                     "technique": technique,
-                    "rci_iterations": int(iterations),
-                    "iterations": history,
-                    "initial_code": initial_code,
-                    "final_code": final_code,
-                    "code": final_code,
-                    "loc": int(last_iter.get("loc") or 0),
-                    "secure": bool(last_iter.get("secure")),
-                }
+                    "initial_code": "",
+                    "code": "",
+                    "iterations": [],
+                    "error": "generation_failed"
+                })
 
-                if "bandit_result" in last_iter:
-                    parsed["bandit_result"] = last_iter["bandit_result"]
-                if "semgrep_result" in last_iter:
-                    parsed["semgrep_result"] = last_iter["semgrep_result"]
+                completed_tasks += 1
+                pbar.update(1)
+                continue
 
-                f.write(json.dumps(parsed, ensure_ascii=False) + "\n")
-                f.flush()
+            initial_code = extract_raw_code(raw_initial)
 
-            task_tokens = get_token_stats() or {}
-            task_llm_stats = get_llm_stats() or {}
-            task_tool_stats = get_tool_stats() or {}
+            print("\n[LLM RAW RESPONSE START]")
+            print(initial_code)
+            print("[LLM RAW RESPONSE END]\n")
 
-            total_prompt_tokens += task_tokens.get("prompt_tokens", 0)
-            total_completion_tokens += task_tokens.get("completion_tokens", 0)
-            total_api_calls += task_llm_stats.get("api_calls", 0)
-            total_llm_time += task_llm_stats.get("llm_time", 0)
-            total_bandit_time += task_tool_stats.get("bandit_time", 0)
-            total_semgrep_time += task_tool_stats.get("semgrep_time", 0)
+            generated.append({
+                "task": task,
+                "intent": intent,
+                "language": lang_key,
+                "framework": t.get("framework"),
+                "technique": technique,
 
-            executed_tasks += 1
+                "initial_code": initial_code,
+
+                "code": initial_code,
+
+                "iterations": []
+            })
+
+            tks = get_token_stats()
+            lls = get_llm_stats()
+
+            total_prompt_tokens += tks.get("prompt_tokens", 0)
+            total_completion_tokens += tks.get("completion_tokens", 0)
+            total_api_calls += lls.get("api_calls", 0)
+            total_llm_time += lls.get("llm_time", 0)
+
+            completed_tasks += 1
 
             task_elapsed = time.time() - task_start
-            if ema_task_time is None:
-                ema_task_time = task_elapsed
-            else:
-                ema_task_time = ema_alpha * task_elapsed + (1 - ema_alpha) * ema_task_time
 
-            remaining = total_tasks - idx
-            eta_min = (ema_task_time * remaining) / 60
-            pbar.set_postfix_str(f"ETA {eta_min:.1f} min")
+            ema_task_time = (
+                task_elapsed
+                if ema_task_time is None
+                else ema_alpha * task_elapsed + (1 - ema_alpha) * ema_task_time
+            )
+
+            remaining = total_tasks - completed_tasks
+            eta_seconds = ema_task_time * remaining
+
+            pbar.set_postfix_str(f"ETA {eta_seconds/60:.1f} min")
             pbar.update(1)
+
+    write_jsonl(output_file, generated)
+
+    print("\n[Stage] Filtering invalid syntax...")
+    filter_jsonl(str(output_file))
+
+    print("\n[Stage] Running analyzers...")
+    analyze_jsonl_batch(str(output_file))
+
+    recs = read_jsonl(output_file)
+
+    b, s = count_vulns(recs)
+
+    print("\n====== Initial Generation Results ======")
+    print(f"Bandit vulnerabilities: {b}")
+    print(f"Semgrep vulnerabilities: {s}")
+
+    tool_stats = get_tool_stats()
+
+    total_bandit_time += tool_stats.get("bandit_time", 0)
+    total_semgrep_time += tool_stats.get("semgrep_time", 0)
+
+    for r in recs:
+
+        r["initial_analysis"] = {
+            "loc": r.get("loc"),
+            "bandit_result": r.get("bandit_result"),
+            "semgrep_result": r.get("semgrep_result"),
+        }
+
+    write_jsonl(output_file, recs)
+
+    for i in range(1, iterations + 1):
+
+        stats = refinement_loop(
+            jsonl_path=output_file,
+            llm=llm,
+            iteration=i,
+            total_iterations=iterations
+        )
+
+        total_prompt_tokens += stats["prompt_tokens"]
+        total_completion_tokens += stats["completion_tokens"]
+        total_api_calls += stats["api_calls"]
+        total_llm_time += stats["llm_time"]
+        total_bandit_time += stats["bandit_time"]
+        total_semgrep_time += stats["semgrep_time"]
 
     elapsed = time.time() - start_time
 
-    try:
-        metrics_dir = out_dir / "rate" / "vuln_density"
-        metrics_dir.mkdir(parents=True, exist_ok=True)
+    plots_dir = out_dir / "plots"
+    plots_dir.mkdir(exist_ok=True, parents=True)
 
-        metrics_txt = metrics_dir / f"{output_file.stem}_metrics.txt"
+    plot_totals(
+        jsonl_path=output_file,
+        out=plots_dir / "Refinement.png"
+    )
 
-        save_metrics_result(
-            str(output_file),
-            str(metrics_txt),
-            run_info={
-                "dataset": dataset,
-                "model": llm.model
-            }
-        )
+    print("\n--- DEBUG BEFORE METRICS ---")
 
-        save_experiment_summary(
-            out_dir=str(out_dir),
-            dataset=dataset,
-            model=llm.model,
-            technique=technique,
-            total_tasks=executed_tasks,
-            elapsed_time=elapsed,
-            total_llm_time=total_llm_time,
-            total_bandit_time=total_bandit_time,
-            total_semgrep_time=total_semgrep_time,
-            total_api_calls=total_api_calls,
-            total_prompt_tokens=total_prompt_tokens,
-            total_completion_tokens=total_completion_tokens,
-            jsonl_path=str(output_file)
-        )
+    b2, s2 = count_vulns(read_jsonl(output_file))
 
-        csv_path = out_dir / "Effect_Of_Refinment.csv"
-        if csv_path.exists():
-            df = load_refinement_df(csv_path)
-            out_img = out_dir / "plots" / "Refinment_Plot.png"
-            out_img.parent.mkdir(parents=True, exist_ok=True)
-            plot_totals(csv_path, out=out_img, kind="line", show=False, df=df, verbose=False)
+    print("Bandit:", b2)
+    print("Semgrep:", s2)
 
-        print(f"[metrics] txt saved: {metrics_txt}")
+    print("----------------------------\n")
 
-    except Exception as e:
-        print(f"[metrics-save] {e}")
+    save_metrics_result(
+        str(output_file),
+        str(out_dir / "metrics.txt"),
+        run_info={
+            "dataset": dataset,
+            "model": llm.model
+        }
+    )
+
+    save_experiment_summary(
+        out_dir=str(out_dir),
+        dataset=dataset,
+        model=llm.model,
+        technique=technique,
+        total_tasks=len(recs),
+        elapsed_time=elapsed,
+        total_llm_time=total_llm_time,
+        total_bandit_time=total_bandit_time,
+        total_semgrep_time=total_semgrep_time,
+        total_api_calls=total_api_calls,
+        total_prompt_tokens=total_prompt_tokens,
+        total_completion_tokens=total_completion_tokens,
+        jsonl_path=str(output_file)
+    )
 
     return str(output_file)

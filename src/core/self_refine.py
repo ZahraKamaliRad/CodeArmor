@@ -5,9 +5,8 @@ from .openai_client import LLMClient, sanitize_model_name
 from .analyzer import analyze_code_split
 from src.paths import PATHS
 from string import Template
-from ..utils.io import csv_log
 from ..utils.metrics import save_metrics_result
-from ..utils.plot_refinment import load_refinement_df, plot_totals
+from ..utils.plot_refinment import plot_totals
 from ..utils.text_utils import strip_markdown_fences
 from ..utils.usage_stats import (get_token_stats,get_llm_stats,get_tool_stats,reset_token_stats,reset_llm_stats,reset_tool_stats)
 from ..utils.save_details_result import save_experiment_summary
@@ -163,9 +162,7 @@ def run_two_analyzers(code: str, lang: str, tmpname: str = "snippet") -> dict:
 def log_two_lines(run_out_dir: str, task_id: str, iter_idx: int, lang: str, scan: dict):
     b_issues = (scan.get("bandit_result") or {}).get("issues") or []
     s_issues = (scan.get("semgrep_result") or {}).get("issues") or []
-    csv_log(run_out_dir=run_out_dir, task_id=f"{task_id}#bandit", iter_idx=iter_idx, language=lang, issues=b_issues)
-    csv_log(run_out_dir=run_out_dir, task_id=f"{task_id}#semgrep", iter_idx=iter_idx, language=lang, issues=s_issues)
-
+    
 
 def refinment_loop(llm,initial_code: str,lang: str,task_id,tmpname: str,iterations: int,run_out_dir: str):
     current_code = initial_code
@@ -441,10 +438,8 @@ def SelfRefine_gen_code(records,dataset: str,technique: str,limit: int | None = 
         )
         csv_path = out_dir / "Effect_Of_Refinment.csv"
         if csv_path.exists():
-            df = load_refinement_df(csv_path)
             plot_out = out_dir / "plots" / "Refinment_Plot.png"
             plot_out.parent.mkdir(parents=True, exist_ok=True)
-            plot_totals(csv_path, out=plot_out, show=False, df=df, verbose=False)
 
     except Exception as e:
         print(f"[metrics-save] {e}")
