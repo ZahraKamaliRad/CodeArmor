@@ -34,19 +34,14 @@ def extract_plan(plan_resp: str) -> dict:
 
 
 
-import re
-
 def extract_code_few_cot(llm_output: str) -> str:
     match = re.search(
-        r"###SECURE_CODE_START###\s*(.*?)\s*###SECURE_CODE_END###",
-        llm_output,
-        re.DOTALL | re.IGNORECASE,
-    )
+        r"###SECURE_CODE_START###\s*```?[a-zA-Z]*\n?(.*?)\n?```?\s*###SECURE_CODE_END###",
+        llm_output,re.DOTALL | re.IGNORECASE)
     if not match:
-        raise ValueError("Could not extract code block from LLM output")
+        return ""
     code = match.group(1).strip()
-    code = re.sub(r"^```[a-zA-Z]*\n?", "", code)
-    code = re.sub(r"\n?```$", "", code)
+    if not code:
+        return ""
 
-    return code.strip()
-
+    return code
