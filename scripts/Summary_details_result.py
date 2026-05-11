@@ -274,9 +274,9 @@ LOC_SHEET_NAME = safe_sheet_name("Average Generated LOC")
 
 with pd.ExcelWriter(OUTPUT_FILE, engine="openpyxl") as writer:
 
-    summary_df.to_excel(writer,sheet_name="ُSummary",index=False)
+    summary_df.to_excel(writer,sheet_name="summary",index=False)
 
-    reduction_df.to_excel(writer,sheet_name="Reduction_rate_density",index=False)
+    reduction_df.to_excel(writer,sheet_name="reduction_rate_density",index=False)
 
     loc_summary_df.to_excel(writer,sheet_name=LOC_SHEET_NAME,index=False)
 
