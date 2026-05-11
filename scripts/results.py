@@ -556,7 +556,7 @@ class SecurityMetricsConsolidator:
             
             adjusted_width = min(max_length + 2, 50)
             ws.column_dimensions[column_letter].width = adjusted_width
-    
+
     def create_visualizations(self):
         """Create comprehensive visualizations."""
         df = pd.DataFrame(self.data)
@@ -568,32 +568,192 @@ class SecurityMetricsConsolidator:
         sns.set_style("whitegrid")
         plt.rcParams['figure.figsize'] = (14, 8)
         
-        # 1. Vulnerability Rate Comparison
-        if 'bandit_rate' in df.columns and 'semgrep_rate' in df.columns:
+        # Identify iterative vs single-run methods
+        df['base_method'] = df['method'].str.replace(r'_iter\d+$', '', regex=True)
+        df['iteration'] = df['method'].str.extract(r'_iter(\d+)$').fillna(0).astype(int)
+        df['method_type'] = df['iteration'].apply(lambda x: 'Iterative' if x > 0 else 'Single-run')
+        
+        # 1. Vulnerability Density Comparison (VD only, no VR)
+        if 'bandit_density' in df.columns and 'semgrep_density' in df.columns:
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
             
-            rate_data = df.groupby('method')[['bandit_rate', 'semgrep_rate']].mean()
-            rate_data.plot(kind='bar', ax=ax1)
-            ax1.set_title('Average Vulnerability Rate by Method', fontsize=14, fontweight='bold')
+            density_data = df.groupby('method')[['bandit_density', 'semgrep_density']].mean()
+            density_data.plot(kind='bar', ax=ax1, color=['#e74c3c', '#3498db'])
+            ax1.set_title('Average Vulnerability Density by Method', fontsize=14, fontweight='bold')
             ax1.set_xlabel('Method', fontsize=12)
-            ax1.set_ylabel('Vulnerability Rate', fontsize=12)
+            ax1.set_ylabel('Vulnerability Density (issues/LOC)', fontsize=12)
             ax1.legend(['Bandit', 'Semgrep'])
             ax1.tick_params(axis='x', rotation=45)
+            ax1.grid(axis='y', alpha=0.3)
             
-            # Density comparison
-            density_data = df.groupby('method')[['bandit_density', 'semgrep_density']].mean()
-            density_data.plot(kind='bar', ax=ax2)
-            ax2.set_title('Average Vulnerability Density by Method', fontsize=14, fontweight='bold')
-            ax2.set_xlabel('Method', fontsize=12)
-            ax2.set_ylabel('Vulnerability Density', fontsize=12)
-            ax2.legend(['Bandit', 'Semgrep'])
-            ax2.tick_params(axis='x', rotation=45)
+            # Combined density comparison
+            combined_density = df.groupby('method')[['bandit_density', 'semgrep_density']].mean().mean(axis=1).sort_values()
+            combined_density.plot(kind='barh', ax=ax2, color='steelblue')
+            ax2.set_title('Average Combined Vulnerability Density', fontsize=14, fontweight='bold')
+            ax2.set_xlabel('Vulnerability Density (issues/LOC)', fontsize=12)
+            ax2.set_ylabel('Method', fontsize=12)
+            ax2.grid(axis='x', alpha=0.3)
             
             plt.tight_layout()
-            plt.savefig(self.output_dir / 'vulnerability_comparison.png', dpi=300, bbox_inches='tight')
+            plt.savefig(self.output_dir / 'vulnerability_density_comparison.png', dpi=300, bbox_inches='tight')
             plt.close()
         
-                # 2. Token Usage Comparison
+        # 2. Box Plot: Single-run Methods VD Distribution
+        if 'bandit_density' in df.columns and 'semgrep_density' in df.columns:
+            single_run_df = df[df['method_type'] == 'Single-run'].copy()
+            
+            if not single_run_df.empty:
+                fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
+                
+                # Bandit Density Box Plot
+                single_run_df.boxplot(column='bandit_density', by='method', ax=ax1, 
+                                    patch_artist=True, showmeans=True,
+                                    boxprops=dict(facecolor='lightcoral', alpha=0.7),
+                                    medianprops=dict(color='darkred', linewidth=2),
+                                    meanprops=dict(marker='D', markerfacecolor='red', markersize=8))
+                ax1.set_title('Bandit Vulnerability Density - Single-run Methods', fontsize=13, fontweight='bold')
+                ax1.set_xlabel('Method', fontsize=11)
+                ax1.set_ylabel('Bandit Density (issues/LOC)', fontsize=11)
+                ax1.get_figure().suptitle('')  # Remove automatic title
+                ax1.tick_params(axis='x', rotation=45)
+                ax1.grid(axis='y', alpha=0.3)
+                
+                # Semgrep Density Box Plot
+                single_run_df.boxplot(column='semgrep_density', by='method', ax=ax2,
+                                    patch_artist=True, showmeans=True,
+                                    boxprops=dict(facecolor='lightblue', alpha=0.7),
+                                    medianprops=dict(color='darkblue', linewidth=2),
+                                    meanprops=dict(marker='D', markerfacecolor='blue', markersize=8))
+                ax2.set_title('Semgrep Vulnerability Density - Single-run Methods', fontsize=13, fontweight='bold')
+                ax2.set_xlabel('Method', fontsize=11)
+                ax2.set_ylabel('Semgrep Density (issues/LOC)', fontsize=11)
+                ax2.get_figure().suptitle('')
+                ax2.tick_params(axis='x', rotation=45)
+                ax2.grid(axis='y', alpha=0.3)
+                
+                plt.tight_layout()
+                plt.savefig(self.output_dir / 'boxplot_single_run_vd.png', dpi=300, bbox_inches='tight')
+                plt.close()
+        
+        # 3. Box Plot: Iterative Methods VD Distribution
+        if 'bandit_density' in df.columns and 'semgrep_density' in df.columns:
+            iterative_df = df[df['method_type'] == 'Iterative'].copy()
+            
+            if not iterative_df.empty:
+                fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
+                
+                # Bandit Density Box Plot
+                iterative_df.boxplot(column='bandit_density', by='method', ax=ax1,
+                                    patch_artist=True, showmeans=True,
+                                    boxprops=dict(facecolor='#ffcccc', alpha=0.7),
+                                    medianprops=dict(color='darkred', linewidth=2),
+                                    meanprops=dict(marker='D', markerfacecolor='red', markersize=8))
+                ax1.set_title('Bandit Vulnerability Density - Iterative Methods', fontsize=13, fontweight='bold')
+                ax1.set_xlabel('Method', fontsize=11)
+                ax1.set_ylabel('Bandit Density (issues/LOC)', fontsize=11)
+                ax1.get_figure().suptitle('')
+                ax1.tick_params(axis='x', rotation=45)
+                ax1.grid(axis='y', alpha=0.3)
+                
+                # Semgrep Density Box Plot
+                iterative_df.boxplot(column='semgrep_density', by='method', ax=ax2,
+                                    patch_artist=True, showmeans=True,
+                                    boxprops=dict(facecolor='#cce5ff', alpha=0.7),
+                                    medianprops=dict(color='darkblue', linewidth=2),
+                                    meanprops=dict(marker='D', markerfacecolor='blue', markersize=8))
+                ax2.set_title('Semgrep Vulnerability Density - Iterative Methods', fontsize=13, fontweight='bold')
+                ax2.set_xlabel('Method', fontsize=11)
+                ax2.set_ylabel('Semgrep Density (issues/LOC)', fontsize=11)
+                ax2.get_figure().suptitle('')
+                ax2.tick_params(axis='x', rotation=45)
+                ax2.grid(axis='y', alpha=0.3)
+                
+                plt.tight_layout()
+                plt.savefig(self.output_dir / 'boxplot_iterative_vd.png', dpi=300, bbox_inches='tight')
+                plt.close()
+        
+        # 4. Combined Box Plot: All Methods with Color Coding (Iterative vs Single-run)
+        if 'bandit_density' in df.columns and 'semgrep_density' in df.columns:
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 8))
+            
+            # Prepare data for box plots with color coding
+            methods_sorted = df.groupby('method')['semgrep_density'].median().sort_values().index.tolist()
+            
+            # Bandit Density - All Methods
+            positions = []
+            box_data_bandit = []
+            colors_bandit = []
+            
+            for i, method in enumerate(methods_sorted):
+                method_data = df[df['method'] == method]
+                box_data_bandit.append(method_data['bandit_density'].values)
+                positions.append(i)
+                # Color by method type
+                if method_data['method_type'].iloc[0] == 'Iterative':
+                    colors_bandit.append('#ff6b6b')  # Red for iterative
+                else:
+                    colors_bandit.append('#4ecdc4')  # Teal for single-run
+            
+            bp1 = ax1.boxplot(box_data_bandit, positions=positions, patch_artist=True,
+                            showmeans=True, widths=0.6,
+                            medianprops=dict(color='black', linewidth=2),
+                            meanprops=dict(marker='D', markerfacecolor='yellow', 
+                                        markeredgecolor='black', markersize=6))
+            
+            for patch, color in zip(bp1['boxes'], colors_bandit):
+                patch.set_facecolor(color)
+                patch.set_alpha(0.7)
+            
+            ax1.set_xticks(positions)
+            ax1.set_xticklabels(methods_sorted, rotation=45, ha='right')
+            ax1.set_title('Bandit Vulnerability Density: All Methods\n(Red=Iterative, Teal=Single-run)', 
+                        fontsize=13, fontweight='bold')
+            ax1.set_ylabel('Bandit Density (issues/LOC)', fontsize=11)
+            ax1.grid(axis='y', alpha=0.3)
+            
+            # Semgrep Density - All Methods
+            box_data_semgrep = []
+            colors_semgrep = []
+            
+            for method in methods_sorted:
+                method_data = df[df['method'] == method]
+                box_data_semgrep.append(method_data['semgrep_density'].values)
+                if method_data['method_type'].iloc[0] == 'Iterative':
+                    colors_semgrep.append('#ff6b6b')
+                else:
+                    colors_semgrep.append('#4ecdc4')
+            
+            bp2 = ax2.boxplot(box_data_semgrep, positions=positions, patch_artist=True,
+                            showmeans=True, widths=0.6,
+                            medianprops=dict(color='black', linewidth=2),
+                            meanprops=dict(marker='D', markerfacecolor='yellow',
+                                        markeredgecolor='black', markersize=6))
+            
+            for patch, color in zip(bp2['boxes'], colors_semgrep):
+                patch.set_facecolor(color)
+                patch.set_alpha(0.7)
+            
+            ax2.set_xticks(positions)
+            ax2.set_xticklabels(methods_sorted, rotation=45, ha='right')
+            ax2.set_title('Semgrep Vulnerability Density: All Methods\n(Red=Iterative, Teal=Single-run)', 
+                        fontsize=13, fontweight='bold')
+            ax2.set_ylabel('Semgrep Density (issues/LOC)', fontsize=11)
+            ax2.grid(axis='y', alpha=0.3)
+            
+            # Add legend
+            from matplotlib.patches import Patch
+            legend_elements = [
+                Patch(facecolor='#ff6b6b', alpha=0.7, label='Iterative Methods'),
+                Patch(facecolor='#4ecdc4', alpha=0.7, label='Single-run Methods')
+            ]
+            fig.legend(handles=legend_elements, loc='upper center', ncol=2, 
+                    bbox_to_anchor=(0.5, 0.98), fontsize=11)
+            
+            plt.tight_layout(rect=(0.0, 0.0, 1.0, 0.96))
+            plt.savefig(self.output_dir / 'boxplot_all_methods_comparison.png', dpi=300, bbox_inches='tight')
+            plt.close()
+        
+        # 5. Token Usage Comparison
         if 'total_tokens' in df.columns:
             fig, ax = plt.subplots(figsize=(12, 6))
             
@@ -603,17 +763,18 @@ class SecurityMetricsConsolidator:
             ax.set_xlabel('Method', fontsize=12)
             ax.set_ylabel('Total Tokens', fontsize=12)
             ax.tick_params(axis='x', rotation=45)
+            ax.grid(axis='y', alpha=0.3)
             
             # Add value labels on bars
             for i, v in enumerate(token_data):
-                if pd.notna(v):  # Check if value is not NaN
+                if pd.notna(v):
                     ax.text(i, v, f'{int(v):,}', ha='center', va='bottom')
             
             plt.tight_layout()
             plt.savefig(self.output_dir / 'token_usage.png', dpi=300, bbox_inches='tight')
             plt.close()
         
-        # 3. Runtime Comparison
+        # 6. Runtime Comparison
         if 'runtime_seconds' in df.columns:
             fig, ax = plt.subplots(figsize=(12, 6))
             
@@ -623,16 +784,18 @@ class SecurityMetricsConsolidator:
             ax.set_xlabel('Method', fontsize=12)
             ax.set_ylabel('Runtime (seconds)', fontsize=12)
             ax.tick_params(axis='x', rotation=45)
+            ax.grid(axis='y', alpha=0.3)
             
             # Add value labels on bars
             for i, v in enumerate(runtime_data):
-                ax.text(i, v, f'{v:.1f}s', ha='center', va='bottom')
+                if pd.notna(v):
+                    ax.text(i, v, f'{v:.1f}s', ha='center', va='bottom')
             
             plt.tight_layout()
             plt.savefig(self.output_dir / 'runtime_comparison.png', dpi=300, bbox_inches='tight')
             plt.close()
         
-        # 4. Runtime Component Breakdown
+        # 7. Runtime Component Breakdown
         component_cols = ['llm_time', 'bandit_time', 'semgrep_time']
         available_components = [col for col in component_cols if col in df.columns]
         
@@ -641,96 +804,54 @@ class SecurityMetricsConsolidator:
             
             component_data = df.groupby('method')[available_components].mean()
             component_data.plot(kind='bar', stacked=True, ax=ax, 
-                              color=['#3498db', '#e74c3c', '#2ecc71'])
+                            color=['#3498db', '#e74c3c', '#2ecc71'])
             ax.set_title('Runtime Component Breakdown by Method', fontsize=14, fontweight='bold')
             ax.set_xlabel('Method', fontsize=12)
             ax.set_ylabel('Time (seconds)', fontsize=12)
             ax.legend(title='Component', labels=['LLM Time', 'Bandit Time', 'Semgrep Time'])
             ax.tick_params(axis='x', rotation=45)
+            ax.grid(axis='y', alpha=0.3)
             
             plt.tight_layout()
             plt.savefig(self.output_dir / 'runtime_components.png', dpi=300, bbox_inches='tight')
             plt.close()
         
-        # 5. Iteration Analysis (if applicable)
-        df['base_method'] = df['method'].str.replace(r'_iter\d+$', '', regex=True)
-        df['iteration'] = df['method'].str.extract(r'_iter(\d+)$').fillna(0).astype(int)
-        
+        # 8. Iteration Analysis (VD only)
         iterative_methods = df[df['iteration'] > 0]
         
-        if not iterative_methods.empty and 'bandit_rate' in df.columns:
-            fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+        if not iterative_methods.empty and 'bandit_density' in df.columns:
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
             
-            metrics = [
-                ('bandit_rate', 'Bandit Vulnerability Rate'),
-                ('bandit_density', 'Bandit Vulnerability Density'),
-                ('semgrep_rate', 'Semgrep Vulnerability Rate'),
-                ('semgrep_density', 'Semgrep Vulnerability Density')
-            ]
+            # Bandit Density by Iteration
+            for base_method in iterative_methods['base_method'].unique():
+                method_data = iterative_methods[iterative_methods['base_method'] == base_method]
+                iter_means = method_data.groupby('iteration')['bandit_density'].mean()
+                ax1.plot(iter_means.index, iter_means.values, marker='o', label=base_method, linewidth=2)
             
-            for idx, (metric, title) in enumerate(metrics):
-                if metric not in iterative_methods.columns:
-                    continue
-                
-                ax = axes[idx // 2, idx % 2]
-                
+            ax1.set_title('Bandit Vulnerability Density by Iteration', fontsize=12, fontweight='bold')
+            ax1.set_xlabel('Iteration', fontsize=10)
+            ax1.set_ylabel('Bandit Density (issues/LOC)', fontsize=10)
+            ax1.legend()
+            ax1.grid(True, alpha=0.3)
+            
+            # Semgrep Density by Iteration
+            if 'semgrep_density' in iterative_methods.columns:
                 for base_method in iterative_methods['base_method'].unique():
                     method_data = iterative_methods[iterative_methods['base_method'] == base_method]
-                    iter_means = method_data.groupby('iteration')[metric].mean()
-                    ax.plot(iter_means.index, iter_means.values, marker='o', label=base_method, linewidth=2)
+                    iter_means = method_data.groupby('iteration')['semgrep_density'].mean()
+                    ax2.plot(iter_means.index, iter_means.values, marker='o', label=base_method, linewidth=2)
                 
-                ax.set_title(f'{title} by Iteration', fontsize=12, fontweight='bold')
-                ax.set_xlabel('Iteration', fontsize=10)
-                ax.set_ylabel(title, fontsize=10)
-                ax.legend()
-                ax.grid(True, alpha=0.3)
+                ax2.set_title('Semgrep Vulnerability Density by Iteration', fontsize=12, fontweight='bold')
+                ax2.set_xlabel('Iteration', fontsize=10)
+                ax2.set_ylabel('Semgrep Density (issues/LOC)', fontsize=10)
+                ax2.legend()
+                ax2.grid(True, alpha=0.3)
             
             plt.tight_layout()
-            plt.savefig(self.output_dir / 'iteration_analysis.png', dpi=300, bbox_inches='tight')
+            plt.savefig(self.output_dir / 'iteration_density_analysis.png', dpi=300, bbox_inches='tight')
             plt.close()
         
-        # 6. Method Comparison Radar Chart
-        if all(col in df.columns for col in ['bandit_density', 'semgrep_density', 'total_tokens', 'runtime_seconds']):
-            methods = df['method'].unique()[:6]  # Limit to 6 methods for clarity
-            
-            if len(methods) > 0:
-                fig, ax = plt.subplots(figsize=(10, 10), subplot_kw=dict(projection='polar'))
-                
-                categories = ['Bandit Density', 'Semgrep Density', 'Tokens\n(normalized)', 'Runtime\n(normalized)']
-                N = len(categories)
-                
-                angles = [n / float(N) * 2 * np.pi for n in range(N)]
-                angles += angles[:1]
-                
-                ax.set_theta_offset(np.pi / 2)
-                ax.set_theta_direction(-1)
-                ax.set_xticks(angles[:-1])
-                ax.set_xticklabels(categories)
-                
-                for method in methods:
-                    method_data = df[df['method'] == method]
-                    
-                    # Normalize values (lower is better for all metrics)
-                    values = [
-                        method_data['bandit_density'].mean() * 10,
-                        method_data['semgrep_density'].mean() * 10,
-                        method_data['total_tokens'].mean() / df['total_tokens'].max(),
-                        method_data['runtime_seconds'].mean() / df['runtime_seconds'].max()
-                    ]
-                    values += values[:1]
-                    
-                    ax.plot(angles, values, 'o-', linewidth=2, label=method)
-                    ax.fill(angles, values, alpha=0.15)
-                
-                ax.set_ylim(0, 1)
-                ax.legend(loc='upper right', bbox_to_anchor=(1.3, 1.1))
-                ax.set_title('Method Comparison (Normalized Metrics)', fontsize=14, fontweight='bold', pad=20)
-                
-                plt.tight_layout()
-                plt.savefig(self.output_dir / 'method_radar.png', dpi=300, bbox_inches='tight')
-                plt.close()
-        
-        # 7. Efficiency Scatter Plot
+        # 9. Efficiency Scatter Plot (VD only)
         if 'runtime_seconds' in df.columns and 'total_tokens' in df.columns and 'semgrep_density' in df.columns:
             fig, ax = plt.subplots(figsize=(12, 8))
             
@@ -741,17 +862,17 @@ class SecurityMetricsConsolidator:
             })
             
             scatter = ax.scatter(method_summary['runtime_seconds'], 
-                               method_summary['total_tokens'],
-                               s=method_summary['semgrep_density'] * 5000,
-                               alpha=0.6,
-                               c=range(len(method_summary)),
-                               cmap='viridis')
+                            method_summary['total_tokens'],
+                            s=method_summary['semgrep_density'] * 5000,
+                            alpha=0.6,
+                            c=range(len(method_summary)),
+                            cmap='viridis')
             
             for idx, method in enumerate(method_summary.index):
                 ax.annotate(method, 
-                          (method_summary.loc[method, 'runtime_seconds'],
-                           method_summary.loc[method, 'total_tokens']),
-                          xytext=(5, 5), textcoords='offset points', fontsize=9)
+                        (method_summary.loc[method, 'runtime_seconds'],
+                        method_summary.loc[method, 'total_tokens']),
+                        xytext=(5, 5), textcoords='offset points', fontsize=9)
             
             ax.set_xlabel('Runtime (seconds)', fontsize=12)
             ax.set_ylabel('Total Tokens', fontsize=12)
@@ -762,7 +883,7 @@ class SecurityMetricsConsolidator:
             plt.tight_layout()
             plt.savefig(self.output_dir / 'efficiency_scatter.png', dpi=300, bbox_inches='tight')
             plt.close()
-    
+
     def create_excel_report(self):
         """Create a comprehensive Excel report with multiple sheets."""
         df = pd.DataFrame(self.data)
