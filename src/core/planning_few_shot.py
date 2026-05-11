@@ -58,8 +58,6 @@ Output:
 CODING_PROMPT = """
 You are a secure-coding assistant.
 
-Language: {Language}
-
 Intent:
 {Prompt}
 
@@ -93,7 +91,7 @@ Based on the critique:
 {CRIT}
 Improve the following code:
 {CODE}
-Rules: 
+Rules:
 - Modify only the parts related to the listed issues.
 - Do NOT rewrite or restructure unrelated code.
 - Do NOT add new features or unnecessary complexity.

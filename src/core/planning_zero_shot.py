@@ -22,8 +22,6 @@ from ..utils.check_syntax import filter_jsonl,is_syntax_valid
 PLANNING_PROMPT= """
 You are a secure-coding assistant.
 
-Language: {Language}
-
 Produce a concise security mitigation plan for the given task.
 
 Rules:
@@ -46,8 +44,6 @@ Intent:
 CODING_PROMPT = """
 You are a secure-coding assistant.
 
-Language: {Language}
-
 Intent:
 {Prompt}
 
@@ -64,30 +60,30 @@ Do NOT include:
 """
 
 REVIEW_TEMPLATE = """You are a security reviewer.
-Review the following answer and find security problems with it 
 List 3-4 main security issues in separate lines.
-For each issue:
+
+For each issue, include:
 - vulnerability type
-- location
-- fix suggestion
+- exact location (line number or specific code fragment)
+- short fix suggestion
 
-Code:
-{CODE}
-"""
+Be concise. No explanations. No markdown.
+Code to review:
+Code: {CODE} """
 
-IMPROVE_TEMPLATE = """You are a secure coding assistant.
 
+IMPROVE_TEMPLATE = """
+You are a secure coding assistant.
 Based on the critique:
 {CRIT}
-
 Improve the following code:
 {CODE}
-
 Rules:
-- Only fix listed issues
-- Do not refactor unrelated parts
-- Do not add features
-- Keep the code concise and balanced in length; avoid producing overly long or verbose code
+- Modify only the parts related to the listed issues.
+- Do NOT rewrite or restructure unrelated code.
+- Do NOT add new features or unnecessary complexity.
+- Do NOT introduce new vulnerabilities.
+- If an issue is unclear, leave that part unchanged.
 
 Return ONLY the source code.
 Do NOT include:
@@ -95,7 +91,6 @@ Do NOT include:
 - comments
 - explanations
 - markdown
-
 """
 
 def normalize_language(raw: str) -> Tuple[str, str]:
