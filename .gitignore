@@ -224,6 +224,9 @@ outputs/**
 reports/**
 scripts/charts/**
 scripts/summary.xlsx
+scripts/plot.py
+scripts/plots/**
+
 
 # Keep run metadata only
 !outputs/**/run_meta.json
