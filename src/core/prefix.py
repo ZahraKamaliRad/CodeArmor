@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json, re, time
+import json, time
 from pathlib import Path
 from tqdm import tqdm
 from .openai_client import LLMClient, sanitize_model_name
@@ -165,23 +165,18 @@ def gen_code(records, dataset: str, technique: str,
     try:
         metrics_dir = out_dir / "rate" / "vuln_density"
         metrics_dir.mkdir(parents=True, exist_ok=True)
-        metrics_txt = metrics_dir / f"{Path(output_filename).stem}_metrics.txt"
-
+        metrics_txt = metrics_dir / f"{output_file.stem}_metrics.txt"
         save_metrics_result(
             str(output_file),
             str(metrics_txt),
             run_info={
                 "dataset": dataset,
-                "model": llm.model,
+                "model": llm.model
             }
         )
-    except Exception:
-        pass
-
-        print(f"[Metrics] Saved to: {metrics_txt}")
+        print(f"[Metrics Saved] {metrics_txt}")
     except Exception as e:
-        print(f"[metrics-save] {e}")
-
+        print(f"[metrics-save] Error: {e}")
     save_experiment_summary(
         out_dir=str(out_dir),
         dataset=dataset,

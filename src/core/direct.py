@@ -2,9 +2,7 @@ from __future__ import annotations
 from pathlib import Path
 import json
 import time
-import re
 from tqdm import tqdm
-
 from .openai_client import LLMClient, sanitize_model_name
 from src.paths import PATHS
 from ..utils.metrics import save_metrics_result
