@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json, re, time
+import json, time
 from pathlib import Path
 from tqdm import tqdm
 from .openai_client import LLMClient, sanitize_model_name

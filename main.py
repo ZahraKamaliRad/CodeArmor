@@ -7,7 +7,7 @@ from src.data.base import get_dataset, to_direct_records
 from src.core.direct import GenerateCode
 from src.core.prefix import gen_code
 from src.core.rci import rci_gen_code
-from src.core.self_refine import SelfRefine_gen_code
+from src.core.self_refine import self_refine_gen_code
 from src.core.one_shot import OneShot_gen_code
 from src.core.Few_shot_CoT import few_shot_cot_gen_code
 from src.core.planning_few_shot import planning_few_shot_gen_code
@@ -71,7 +71,7 @@ def run_rci(dataset: str, file: str, limit: int, iterations: int=1):
 
 def run_self_refine(dataset: str, file: str, limit: int, iterations: int=1):
     records, out = load_records(dataset, file)
-    SelfRefine_gen_code(records, dataset, tech("self_refine", iterations),
+    self_refine_gen_code(records, dataset, tech("self_refine", iterations),
                         limit=limit, iterations=iterations, output_filename=out)
 
 

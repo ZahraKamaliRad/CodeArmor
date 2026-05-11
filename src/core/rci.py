@@ -1,6 +1,5 @@
 from __future__ import annotations
 import json
-import re
 import time
 from pathlib import Path
 from tqdm import tqdm
@@ -445,13 +444,7 @@ def rci_gen_code(records,dataset: str,technique: str,limit: int | None = None,it
 
     for i in range(1, iterations + 1):
 
-        stats = refinement_loop(
-            jsonl_path=output_file,
-            llm=llm,
-            iteration=i,
-            total_iterations=iterations
-        )
-
+        stats = refinement_loop(jsonl_path=output_file,llm=llm,iteration=i,total_iterations=iterations)
         total_prompt_tokens += stats["prompt_tokens"]
         total_completion_tokens += stats["completion_tokens"]
         total_api_calls += stats["api_calls"]
@@ -464,10 +457,7 @@ def rci_gen_code(records,dataset: str,technique: str,limit: int | None = None,it
     plots_dir = out_dir / "plots"
     plots_dir.mkdir(exist_ok=True, parents=True)
 
-    plot_totals(
-        jsonl_path=output_file,
-        out=plots_dir / "Refinement.png"
-    )
+    plot_totals(jsonl_path=output_file,out=plots_dir / "Refinement.png")
 
     print("\n--- DEBUG BEFORE METRICS ---")
 

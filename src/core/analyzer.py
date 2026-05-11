@@ -152,34 +152,34 @@ def build_summary(tool_name: str, issues: List[Issue], language: str) -> Dict[st
         "secure": len(issues) == 0
     }
 
-def run_bandit(fpath: Path) -> List[Issue]:
-    which_or_raise("bandit")
-    p = subprocess.run(["bandit", "-q", "-f", "json", str(fpath)],
-        capture_output=True,text=True)
+# def run_bandit(fpath: Path) -> List[Issue]:
+#     which_or_raise("bandit")
+#     p = subprocess.run(["bandit", "-q", "-f", "json", str(fpath)],
+#         capture_output=True,text=True)
     
-    out = (p.stdout or "").strip()
-    if not out:
-        return []
-    try:
-        data = json.loads(out)
-    except:
-        return []
-    issues: List[Issue] = []
-    for r in data.get("results") or []:
-        cwe_id = None
-        issue_cwe = r.get("issue_cwe")
-        if isinstance(issue_cwe, dict):
-            cwe_id = issue_cwe.get("id")
+#     out = (p.stdout or "").strip()
+#     if not out:
+#         return []
+#     try:
+#         data = json.loads(out)
+#     except:
+#         return []
+#     issues: List[Issue] = []
+#     for r in data.get("results") or []:
+#         cwe_id = None
+#         issue_cwe = r.get("issue_cwe")
+#         if isinstance(issue_cwe, dict):
+#             cwe_id = issue_cwe.get("id")
 
-        issues.append({
-            "tool": "bandit",
-            "rule_id": r.get("test_id"),
-            "cwe": cwe_id,
-            "severity": normalize_severity(r.get("issue_severity")),
-            "message": r.get("issue_text"),
-            "line": int(r.get("line_number") or 0)
-        })
-    return issues
+#         issues.append({
+#             "tool": "bandit",
+#             "rule_id": r.get("test_id"),
+#             "cwe": cwe_id,
+#             "severity": normalize_severity(r.get("issue_severity")),
+#             "message": r.get("issue_text"),
+#             "line": int(r.get("line_number") or 0)
+#         })
+#     return issues
 
 
 def semgrep_extract_cwe(meta: Dict[str, Any]) -> Optional[Union[str, List[Any]]]:
@@ -191,183 +191,183 @@ def semgrep_extract_cwe(meta: Dict[str, Any]) -> Optional[Union[str, List[Any]]]
     return None
 
 
-def run_semgrep(fpath: Path) -> List[Issue]:
-    which_or_raise("semgrep")
+# def run_semgrep(fpath: Path) -> List[Issue]:
+#     which_or_raise("semgrep")
 
-    cmd = [
-        "semgrep", "scan",
-        "--quiet",
-        "--metrics=off",
-        "--config", str(SEMGREP_RULES),
-        "--json",
-        "--include", fpath.name,
-        str(fpath.parent)
-    ]
+#     cmd = [
+#         "semgrep", "scan",
+#         "--quiet",
+#         "--metrics=off",
+#         "--config", str(SEMGREP_RULES),
+#         "--json",
+#         "--include", fpath.name,
+#         str(fpath.parent)
+#     ]
 
-    p = subprocess.run(cmd, capture_output=True, text=True, errors="ignore")
+#     p = subprocess.run(cmd, capture_output=True, text=True, errors="ignore")
 
-    if p.returncode not in (0, 1):
-        return []
+#     if p.returncode not in (0, 1):
+#         return []
 
-    out = (p.stdout or "").strip()
-    if not out:
-        return []
+#     out = (p.stdout or "").strip()
+#     if not out:
+#         return []
 
-    idx = out.find("{")
-    if idx == -1:
-        return []
+#     idx = out.find("{")
+#     if idx == -1:
+#         return []
 
-    try:
-        data = json.loads(out[idx:])
-    except:
-        return []
+#     try:
+#         data = json.loads(out[idx:])
+#     except:
+#         return []
 
-    issues = []
-    for r in data.get("results") or []:
-        extra = r.get("extra") or {}
-        meta = extra.get("metadata") or {}
+#     issues = []
+#     for r in data.get("results") or []:
+#         extra = r.get("extra") or {}
+#         meta = extra.get("metadata") or {}
 
-        issues.append({
-            "tool": "semgrep",
-            "rule_id": r.get("check_id"),
-            "cwe": semgrep_extract_cwe(meta),
-            "severity": normalize_severity(extra.get("severity") or meta.get("severity")),
-            "message": extra.get("message") or "",
-            "line": int((r.get("start") or {}).get("line") or 0)
-        })
+#         issues.append({
+#             "tool": "semgrep",
+#             "rule_id": r.get("check_id"),
+#             "cwe": semgrep_extract_cwe(meta),
+#             "severity": normalize_severity(extra.get("severity") or meta.get("severity")),
+#             "message": extra.get("message") or "",
+#             "line": int((r.get("start") or {}).get("line") or 0)
+#         })
 
-    return issues
-
-
-
-def analyze_code(code: str,language: str,tools: Optional[List[str]] = None,
-    tmpname: str = "snippet") -> Tuple[List[Issue], int, Dict[str, Any]]:
-
-    selected = [
-        t.strip().lower()
-        for t in (tools or [])
-        if t and t.strip()
-    ]
-
-    ext = extension_for_language(language)
-    stable_filename = f"{tmpname}{ext}"
-
-    with tempfile.TemporaryDirectory() as td:
-        fpath = Path(td) / stable_filename
-        fpath.write_text(code or "", encoding="utf-8")
-
-        loc = count_loc(code or "")
-        per_tool: Dict[str, List[Issue]] = {}
-        all_issues: List[Issue] = []
-
-        def run_tool_wrapper(tool: str):
-            start = time.time()
-            ts = datetime.now().strftime("%H:%M:%S")
-            print(f"[analysis] Running {tool} ... (start {ts})")
-
-            try:
-                if tool == "bandit":
-                    issues = run_bandit(fpath)
-                elif tool == "semgrep":
-                    issues = run_semgrep(fpath)
-                else:
-                    issues = []
-
-                duration = time.time() - start
-                record_tool_time(tool , duration)
-
-                print(f"[analysis] {tool} finished in {duration:.2f}s | issues={len(issues)}")
-
-            except Exception as e:
-
-                duration = time.time() - start
-                record_tool_time(tool, duration)
-                print(f"[analysis] {tool} FAILED after {duration:.2f}s | error={e}")
-                issues = []
-
-            for iss in issues:
-                iss["filename"] = stable_filename
-
-            return tool, issues
-
-        with ThreadPoolExecutor(max_workers=len(selected)) as ex:
-            futures = [ex.submit(run_tool_wrapper, t) for t in selected]
-
-            for f in as_completed(futures):
-                tool, issues = f.result()
-                per_tool[tool] = issues
-                all_issues.extend(issues)
-
-        severity_counts: Dict[str, int] = {}
-        cwe_counts: Dict[str, int] = {}
-        for iss in all_issues:
-            sev = (iss.get("severity") or "LOW").upper()
-            severity_counts[sev] = severity_counts.get(sev, 0) + 1
-
-            for c in extract_cwe_keys(iss.get("cwe")):
-                cwe_counts[c] = cwe_counts.get(c, 0) + 1
-
-        summary = {
-            "language": lang_key(language),
-            "tools": selected,
-            "tool_issue_counts": {k: len(v) for k, v in per_tool.items()},
-            "total_tool_issues": sum(len(v) for v in per_tool.values()),
-            "severity_counts": severity_counts,
-            "cwe_counts": cwe_counts,
-            "secure": len(all_issues) == 0
-        }
-
-        return all_issues, loc, summary
+#     return issues
 
 
 
-def analyze_code_split(code: str, language: str, tmpname: str = "snippet") -> Dict[str, Any]:
+# def analyze_code(code: str,language: str,tools: Optional[List[str]] = None,
+#     tmpname: str = "snippet") -> Tuple[List[Issue], int, Dict[str, Any]]:
 
-    tools: List[str] = []
-    if ENABLE_BANDIT:
-        tools.append("bandit")
-    if ENABLE_SEMGREP:
-        tools.append("semgrep")
+#     selected = [
+#         t.strip().lower()
+#         for t in (tools or [])
+#         if t and t.strip()
+#     ]
 
-    if not tools:
-        raise ValueError("No security tools enabled")
+#     ext = extension_for_language(language)
+#     stable_filename = f"{tmpname}{ext}"
 
-    all_issues, loc, _ = analyze_code(code, language, tools=tools, tmpname=tmpname)
+#     with tempfile.TemporaryDirectory() as td:
+#         fpath = Path(td) / stable_filename
+#         fpath.write_text(code or "", encoding="utf-8")
 
-    def build_summary(tool_name: str, issues: List[Issue]) -> Dict[str, Any]:
-        severity_counts: Dict[str, int] = {}
-        cwe_counts: Dict[str, int] = {}
+#         loc = count_loc(code or "")
+#         per_tool: Dict[str, List[Issue]] = {}
+#         all_issues: List[Issue] = []
 
-        for iss in issues:
-            sev = (iss.get("severity") or "LOW").upper()
-            severity_counts[sev] = severity_counts.get(sev, 0) + 1
-            for c in extract_cwe_keys(iss.get("cwe")):
-                cwe_counts[c] = cwe_counts.get(c, 0) + 1
+#         def run_tool_wrapper(tool: str):
+#             start = time.time()
+#             ts = datetime.now().strftime("%H:%M:%S")
+#             print(f"[analysis] Running {tool} ... (start {ts})")
 
-        return {
+#             try:
+#                 if tool == "bandit":
+#                     issues = run_bandit(fpath)
+#                 elif tool == "semgrep":
+#                     issues = run_semgrep(fpath)
+#                 else:
+#                     issues = []
+
+#                 duration = time.time() - start
+#                 record_tool_time(tool , duration)
+
+#                 print(f"[analysis] {tool} finished in {duration:.2f}s | issues={len(issues)}")
+
+#             except Exception as e:
+
+#                 duration = time.time() - start
+#                 record_tool_time(tool, duration)
+#                 print(f"[analysis] {tool} FAILED after {duration:.2f}s | error={e}")
+#                 issues = []
+
+#             for iss in issues:
+#                 iss["filename"] = stable_filename
+
+#             return tool, issues
+
+#         with ThreadPoolExecutor(max_workers=len(selected)) as ex:
+#             futures = [ex.submit(run_tool_wrapper, t) for t in selected]
+
+#             for f in as_completed(futures):
+#                 tool, issues = f.result()
+#                 per_tool[tool] = issues
+#                 all_issues.extend(issues)
+
+#         severity_counts: Dict[str, int] = {}
+#         cwe_counts: Dict[str, int] = {}
+#         for iss in all_issues:
+#             sev = (iss.get("severity") or "LOW").upper()
+#             severity_counts[sev] = severity_counts.get(sev, 0) + 1
+
+#             for c in extract_cwe_keys(iss.get("cwe")):
+#                 cwe_counts[c] = cwe_counts.get(c, 0) + 1
+
+#         summary = {
+#             "language": lang_key(language),
+#             "tools": selected,
+#             "tool_issue_counts": {k: len(v) for k, v in per_tool.items()},
+#             "total_tool_issues": sum(len(v) for v in per_tool.values()),
+#             "severity_counts": severity_counts,
+#             "cwe_counts": cwe_counts,
+#             "secure": len(all_issues) == 0
+#         }
+
+#         return all_issues, loc, summary
+
+
+
+# def analyze_code_split(code: str, language: str, tmpname: str = "snippet") -> Dict[str, Any]:
+
+#     tools: List[str] = []
+#     if ENABLE_BANDIT:
+#         tools.append("bandit")
+#     if ENABLE_SEMGREP:
+#         tools.append("semgrep")
+
+#     if not tools:
+#         raise ValueError("No security tools enabled")
+
+#     all_issues, loc, _ = analyze_code(code, language, tools=tools, tmpname=tmpname)
+
+#     def build_summary(tool_name: str, issues: List[Issue]) -> Dict[str, Any]:
+#         severity_counts: Dict[str, int] = {}
+#         cwe_counts: Dict[str, int] = {}
+
+#         for iss in issues:
+#             sev = (iss.get("severity") or "LOW").upper()
+#             severity_counts[sev] = severity_counts.get(sev, 0) + 1
+#             for c in extract_cwe_keys(iss.get("cwe")):
+#                 cwe_counts[c] = cwe_counts.get(c, 0) + 1
+
+#         return {
             
-            "language": lang_key(language),
-            "tools": [tool_name],
-            "tool_issue_counts": {tool_name: len(issues)},
-            "total_tool_issues": len(issues),
-            "severity_counts": severity_counts,
-            "cwe_counts": cwe_counts,
-            "secure": len(issues) == 0 }
+#             "language": lang_key(language),
+#             "tools": [tool_name],
+#             "tool_issue_counts": {tool_name: len(issues)},
+#             "total_tool_issues": len(issues),
+#             "severity_counts": severity_counts,
+#             "cwe_counts": cwe_counts,
+#             "secure": len(issues) == 0 }
 
-    result: Dict[str, Any] = {"loc": int(loc)}
+#     result: Dict[str, Any] = {"loc": int(loc)}
 
-    for tool in tools:
+#     for tool in tools:
 
-        tool_issues = [i for i in all_issues if i.get("tool") == tool]
+#         tool_issues = [i for i in all_issues if i.get("tool") == tool]
 
-        if not tool_issues and tool not in tools:
-            continue
+#         if not tool_issues and tool not in tools:
+#             continue
 
-        result[f"{tool}_result"] = build_tool_result(
-        tool_issues, language, tool)
+#         result[f"{tool}_result"] = build_tool_result(
+#         tool_issues, language, tool)
 
 
-    return result
+#     return result
 
 
 
@@ -453,27 +453,21 @@ def analyze_jsonl_batch(jsonl_path: str) -> None:
 
     output_path = Path(jsonl_path)
     scan_dir = output_path.parent / f"{output_path.stem}__batch_scan"
-
     if scan_dir.exists():
         shutil.rmtree(scan_dir)
 
     scan_dir.mkdir(parents=True, exist_ok=True)
-
     print(f"Preparing {len(records)} files for batch scanning...")
-
     file_map: Dict[str, int] = {}
     language_map: Dict[str, str] = {}
 
     for idx, rec in enumerate(records):
         code = rec.get("code") or ""
         language = rec.get("language") or "python"
-
         ext = extension_for_language(language)
         fname = f"snippet_{idx}{ext}"
         fpath = scan_dir / fname
-
         fpath.write_text(code, encoding="utf-8")
-
         file_map[fname] = idx
         language_map[fname] = language
 
@@ -482,7 +476,6 @@ def analyze_jsonl_batch(jsonl_path: str) -> None:
 
     if ENABLE_BANDIT:
         which_or_raise("bandit")
-
         start = time.time()
         cmd = [
             "bandit",
@@ -494,29 +487,21 @@ def analyze_jsonl_batch(jsonl_path: str) -> None:
         ]
 
         p = run_with_spinner(cmd, "Running Bandit on batch")
-
         duration = time.time() - start
         record_tool_time("bandit", duration)
-
         print(f"Bandit finished with return code {p.returncode} in {duration:.2f}s")
-
         if p.returncode not in (0, 1):
             print(f"Bandit stderr:\n{p.stderr}")
-
         out = (p.stdout or "").strip()
-
         if out:
             try:
                 data = json.loads(out)
-
                 for r in data.get("results") or []:
                     filename = Path(r.get("filename") or "").name
-
                     cwe_id = None
                     issue_cwe = r.get("issue_cwe")
                     if isinstance(issue_cwe, dict):
                         cwe_id = issue_cwe.get("id")
-
                     issue = {
                         "tool": "bandit",
                         "rule_id": r.get("test_id"),
@@ -526,18 +511,14 @@ def analyze_jsonl_batch(jsonl_path: str) -> None:
                         "line": int(r.get("line_number") or 0),
                         "filename": filename,
                     }
-
                     bandit_results.setdefault(filename, []).append(issue)
-
                 for fname, issues in bandit_results.items():
                     bandit_results[fname] = deduplicate_issues(issues)
-
             except Exception as e:
                 print(f"Failed to parse Bandit JSON output: {e}")
 
     if ENABLE_SEMGREP:
         which_or_raise("semgrep")
-
         start = time.time()
         cmd = [
             "semgrep",
@@ -554,10 +535,8 @@ def analyze_jsonl_batch(jsonl_path: str) -> None:
         ]
 
         p = run_with_spinner(cmd, "Running Semgrep on batch")
-
         duration = time.time() - start
         record_tool_time("semgrep", duration)
-
         print(f"Semgrep finished with return code {p.returncode} in {duration:.2f}s")
 
         if p.returncode not in (0, 1):
@@ -570,13 +549,10 @@ def analyze_jsonl_batch(jsonl_path: str) -> None:
             if idx != -1:
                 try:
                     data = json.loads(out[idx:])
-
                     for r in data.get("results") or []:
                         extra = r.get("extra") or {}
                         meta = extra.get("metadata") or {}
-
                         filename = Path(r.get("path") or "").name
-
                         issue = {
                             "tool": "semgrep",
                             "rule_id": r.get("check_id"),
@@ -590,19 +566,15 @@ def analyze_jsonl_batch(jsonl_path: str) -> None:
                         }
 
                         semgrep_results.setdefault(filename, []).append(issue)
-
                     for fname, issues in semgrep_results.items():
                         #semgrep_results[fname] = deduplicate_issues(issues)
                         semgrep_results[fname] = deduplicate_issues(issues, mode="cwe_line_merge")
-
-
                 except Exception as e:
                     print(f"Failed to parse Semgrep JSON output: {e}")
             else:
                 print("Semgrep output did not contain JSON object.")
         else:
             print("Semgrep returned no output.")
-
     print("\nAttaching results to records...")
 
     for fname, rec_idx in file_map.items():
@@ -619,10 +591,8 @@ def analyze_jsonl_batch(jsonl_path: str) -> None:
         records[rec_idx]["semgrep_result"] = build_tool_result(
         semgrep_issues, language, "semgrep"
         )
-
-
     print("Writing results back to JSONL...")
-
+    
     with jsonl_file.open("w", encoding="utf-8") as f:
         for r in records:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
