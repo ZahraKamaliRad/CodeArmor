@@ -939,4 +939,4 @@ def main():
 if __name__ == '__main__':
     main()
 
-# python .\scripts\results.py --input_dir .\outputs\ --output_dir .\reports\ 
+# python .\scripts\results.py --input-dir .\outputs\ --output-dir .\reports\ 

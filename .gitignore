@@ -222,6 +222,7 @@ api_key_local.txt
 # Generated LLM outputs (artifacts)
 outputs/**
 reports/**
+temp/**
 scripts/charts/**
 scripts/summary.xlsx
 
