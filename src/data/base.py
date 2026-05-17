@@ -30,19 +30,26 @@ def get_dataset(name: str, path: Path) -> BaseDataset:
         raise KeyError(f"Unknown dataset: {name}. Known: {list(_DATASETS)}")
     return _DATASETS[name](path)
 
-def to_direct_records(samples: Iterable[Sample]) -> List[Dict[str, Any]]:
-    out: List[Dict[str, Any]] = []
+def to_direct_records(samples):
+    out = []
 
     for s in samples:
         meta = s.metadata or {}
 
+        test_case = meta.get("test")
+        entry_point = meta.get("entry_point")
+
         out.append({
             "ID": s.task_id,
             "Prompt": s.prompt,
-            "framework": None,
+            "task_id": s.task_id,
+            "task": s.task_id,
+            "intent": s.prompt,
+            "prompt": s.prompt,
             "language": s.language,
-            "test_case": meta.get("test"),
-            "entry_point": meta.get("entry_point"),
+            "framework": None,
+            "test_case": test_case,
+            "entry_point": entry_point
         })
 
     return out

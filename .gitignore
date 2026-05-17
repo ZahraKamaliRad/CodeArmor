@@ -227,7 +227,10 @@ scripts/charts/**
 scripts/summary.xlsx
 scripts/plot.py
 scripts/plots/**
+/scripts/clean_old_semgrep_jsonl.py
 
+## check functionality
+/functionality/
 
 # Keep run metadata only
 !outputs/**/run_meta.json
