@@ -116,6 +116,7 @@ def to_cwe_key(x: Any) -> Optional[str]:
     return None
 
 
+
 def extract_cwe_keys(cwe_field: Any) -> List[str]:
     keys: List[str] = []
     if cwe_field is None:
