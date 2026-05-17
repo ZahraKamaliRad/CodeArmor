@@ -8,7 +8,8 @@ class Sample:
     task_id: str
     prompt: str
     ref_code: Optional[str] = None
-    language: str = "python"   
+    language: str = "python"
+    metadata: Optional[Dict[str, Any]] = None
 class BaseDataset:
     name: str
     def __init__(self, path: Path):
@@ -31,11 +32,17 @@ def get_dataset(name: str, path: Path) -> BaseDataset:
 
 def to_direct_records(samples: Iterable[Sample]) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
+
     for s in samples:
+        meta = s.metadata or {}
+
         out.append({
             "ID": s.task_id,
             "Prompt": s.prompt,
             "framework": None,
-            "language": s.language, 
+            "language": s.language,
+            "test_case": meta.get("test"),
+            "entry_point": meta.get("entry_point"),
         })
+
     return out

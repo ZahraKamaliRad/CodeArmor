@@ -471,7 +471,7 @@ def planning_few_shot_gen_code(records, dataset: str, technique: str, limit: int
 
     plots_dir = out_dir / "plots"
     plots_dir.mkdir(exist_ok=True, parents=True)
-    plot_totals(output_file,out=out_dir / "plots" / "Refinment.png")
+    plot_totals(output_file,out=out_dir / "plots" / "Refinement.png")
 
     try:
         metrics_dir = out_dir / "rate" / "vuln_density"

@@ -152,34 +152,34 @@ def build_summary(tool_name: str, issues: List[Issue], language: str) -> Dict[st
         "secure": len(issues) == 0
     }
 
-# def run_bandit(fpath: Path) -> List[Issue]:
-#     which_or_raise("bandit")
-#     p = subprocess.run(["bandit", "-q", "-f", "json", str(fpath)],
-#         capture_output=True,text=True)
+def run_bandit(fpath: Path) -> List[Issue]:
+    which_or_raise("bandit")
+    p = subprocess.run(["bandit", "-q", "-f", "json", str(fpath)],
+        capture_output=True,text=True)
     
-#     out = (p.stdout or "").strip()
-#     if not out:
-#         return []
-#     try:
-#         data = json.loads(out)
-#     except:
-#         return []
-#     issues: List[Issue] = []
-#     for r in data.get("results") or []:
-#         cwe_id = None
-#         issue_cwe = r.get("issue_cwe")
-#         if isinstance(issue_cwe, dict):
-#             cwe_id = issue_cwe.get("id")
+    out = (p.stdout or "").strip()
+    if not out:
+        return []
+    try:
+        data = json.loads(out)
+    except:
+        return []
+    issues: List[Issue] = []
+    for r in data.get("results") or []:
+        cwe_id = None
+        issue_cwe = r.get("issue_cwe")
+        if isinstance(issue_cwe, dict):
+            cwe_id = issue_cwe.get("id")
 
-#         issues.append({
-#             "tool": "bandit",
-#             "rule_id": r.get("test_id"),
-#             "cwe": cwe_id,
-#             "severity": normalize_severity(r.get("issue_severity")),
-#             "message": r.get("issue_text"),
-#             "line": int(r.get("line_number") or 0)
-#         })
-#     return issues
+        issues.append({
+            "tool": "bandit",
+            "rule_id": r.get("test_id"),
+            "cwe": cwe_id,
+            "severity": normalize_severity(r.get("issue_severity")),
+            "message": r.get("issue_text"),
+            "line": int(r.get("line_number") or 0)
+        })
+    return issues
 
 
 def semgrep_extract_cwe(meta: Dict[str, Any]) -> Optional[Union[str, List[Any]]]:
@@ -191,52 +191,52 @@ def semgrep_extract_cwe(meta: Dict[str, Any]) -> Optional[Union[str, List[Any]]]
     return None
 
 
-# def run_semgrep(fpath: Path) -> List[Issue]:
-#     which_or_raise("semgrep")
+def run_semgrep(fpath: Path) -> List[Issue]:
+    which_or_raise("semgrep")
 
-#     cmd = [
-#         "semgrep", "scan",
-#         "--quiet",
-#         "--metrics=off",
-#         "--config", str(SEMGREP_RULES),
-#         "--json",
-#         "--include", fpath.name,
-#         str(fpath.parent)
-#     ]
+    cmd = [
+        "semgrep", "scan",
+        "--quiet",
+        "--metrics=off",
+        "--config", str(SEMGREP_RULES),
+        "--json",
+        "--include", fpath.name,
+        str(fpath.parent)
+    ]
 
-#     p = subprocess.run(cmd, capture_output=True, text=True, errors="ignore")
+    p = subprocess.run(cmd, capture_output=True, text=True, errors="ignore")
 
-#     if p.returncode not in (0, 1):
-#         return []
+    if p.returncode not in (0, 1):
+        return []
 
-#     out = (p.stdout or "").strip()
-#     if not out:
-#         return []
+    out = (p.stdout or "").strip()
+    if not out:
+        return []
 
-#     idx = out.find("{")
-#     if idx == -1:
-#         return []
+    idx = out.find("{")
+    if idx == -1:
+        return []
 
-#     try:
-#         data = json.loads(out[idx:])
-#     except:
-#         return []
+    try:
+        data = json.loads(out[idx:])
+    except:
+        return []
 
-#     issues = []
-#     for r in data.get("results") or []:
-#         extra = r.get("extra") or {}
-#         meta = extra.get("metadata") or {}
+    issues = []
+    for r in data.get("results") or []:
+        extra = r.get("extra") or {}
+        meta = extra.get("metadata") or {}
 
-#         issues.append({
-#             "tool": "semgrep",
-#             "rule_id": r.get("check_id"),
-#             "cwe": semgrep_extract_cwe(meta),
-#             "severity": normalize_severity(extra.get("severity") or meta.get("severity")),
-#             "message": extra.get("message") or "",
-#             "line": int((r.get("start") or {}).get("line") or 0)
-#         })
+        issues.append({
+            "tool": "semgrep",
+            "rule_id": r.get("check_id"),
+            "cwe": semgrep_extract_cwe(meta),
+            "severity": normalize_severity(extra.get("severity") or meta.get("severity")),
+            "message": extra.get("message") or "",
+            "line": int((r.get("start") or {}).get("line") or 0)
+        })
 
-#     return issues
+    return issues
 
 
 
@@ -430,6 +430,42 @@ def deduplicate_issues(issues: List[Dict[str, Any]], mode: str = "strict") -> Li
 
     return unique
 ################## Remove repetitive cwe issue in semgrep #######################
+################## Add real vuln in semgrep analysis ############################
+SECURITY_RULE_PATTERNS = ["security","injection","sql","xss","ssti","ssrf",
+    "csrf","deserialization","command","exec","eval","path-traversal","traversal",
+    "open-redirect","redirect","crypto","hash","weak-random","random","jwt",
+    "auth","authentication","authorization","secret","hardcoded","token",
+    "password","pickle","xml","xxe","ldap","rce","dos","overflow","taint","unsafe",]
+
+def is_real_security_issue(rule_id: Optional[str],message: str,metadata: Dict[str, Any],
+    cwe: Optional[Union[str, List[str]]]) -> bool:
+
+    if cwe:
+        return True
+    
+    text = " ".join([str(rule_id or ""),str(message or "")]).lower()
+
+    category = str(metadata.get("category") or "").lower()
+
+    confidence = str(metadata.get("confidence") or "").lower()
+
+    impact = str(metadata.get("impact") or "").lower()
+
+    if category == "security":
+        return True
+
+    for pattern in SECURITY_RULE_PATTERNS:
+        if pattern in text:
+            return True
+
+    meta_text = " ".join([category,confidence,impact]).lower()
+
+    for pattern in SECURITY_RULE_PATTERNS:
+        if pattern in meta_text:
+            return True
+
+    return False
+################## Add real vuln in semgrep analysis ############################
 def analyze_jsonl_batch(jsonl_path: str) -> None:
     jsonl_file = Path(jsonl_path)
 
@@ -523,8 +559,7 @@ def analyze_jsonl_batch(jsonl_path: str) -> None:
         cmd = [
             "semgrep",
             "scan",
-            "--jobs",
-            "0",
+            "--jobs","0",
             "--quiet",
             "--metrics=off",
             "--no-git-ignore",
@@ -533,6 +568,7 @@ def analyze_jsonl_batch(jsonl_path: str) -> None:
             "--json",
             str(scan_dir),
         ]
+
 
         p = run_with_spinner(cmd, "Running Semgrep on batch")
         duration = time.time() - start
@@ -552,20 +588,25 @@ def analyze_jsonl_batch(jsonl_path: str) -> None:
                     for r in data.get("results") or []:
                         extra = r.get("extra") or {}
                         meta = extra.get("metadata") or {}
+
+                        cwe_value = semgrep_extract_cwe(meta)
                         filename = Path(r.get("path") or "").name
+                        rule_id = r.get("check_id")
+                        message = extra.get("message") or ""
+
+                        if not is_real_security_issue(rule_id=rule_id,message=message,metadata=meta,cwe=cwe_value):
+                            continue
                         issue = {
                             "tool": "semgrep",
-                            "rule_id": r.get("check_id"),
-                            "cwe": semgrep_extract_cwe(meta),
-                            "severity": normalize_severity(
-                                extra.get("severity") or meta.get("severity")
-                            ),
-                            "message": extra.get("message") or "",
+                            "rule_id": rule_id,
+                            "cwe": cwe_value,
+                            "severity": normalize_severity(extra.get("severity") or meta.get("severity")),
+                            "message": message,
                             "line": int((r.get("start") or {}).get("line") or 0),
                             "filename": filename,
                         }
-
                         semgrep_results.setdefault(filename, []).append(issue)
+
                     for fname, issues in semgrep_results.items():
                         #semgrep_results[fname] = deduplicate_issues(issues)
                         semgrep_results[fname] = deduplicate_issues(issues, mode="cwe_line_merge")

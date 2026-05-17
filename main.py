@@ -23,6 +23,7 @@ def dataset_registered(name: str):
         "securityeval": "src.data.securityeval",
         "llmseceval": "src.data.llmseceval",
         "sallm": "src.data.sallm",
+        "humaneval": "src.data.humaneval"
     }
     mod = module_map.get(name.lower())
     if not mod:
@@ -137,7 +138,7 @@ def main():
     parser.add_argument("--mode", required=True,
                         choices=list(dispatch.keys()))
     parser.add_argument("--dataset", required=True,
-                        choices=["securityeval", "llmseceval", "sallm"])
+                        choices=["securityeval", "llmseceval", "sallm", "humaneval"])
     parser.add_argument("--file", required=True)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--iterations", type=int, default=None)
