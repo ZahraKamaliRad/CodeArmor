@@ -16,10 +16,18 @@ class SecurityDataAggregator:
         self.output_file = self.base_path / "summary.xlsx"
 
         self.TECHNIQUE_SUFFIX_RE = re.compile(r"\(\d+\)$", re.IGNORECASE)
+
         self.LOC_RE = re.compile(
             r"^\s*total\s+LOC\s+\(L\)\s*:\s*(\d+)\s*$",
             re.IGNORECASE | re.MULTILINE,
         )
+
+        self.PASS1_RE = re.compile(
+            r"^\s*Pass@1\s*:\s*([0-9.]+)\s*$",
+            re.IGNORECASE | re.MULTILINE,
+        )
+
+        self.functionality_dir = self.project_root / "functionality" / "outputs"
 
     def _truncate4(self, x):
         try:
@@ -149,6 +157,7 @@ class SecurityDataAggregator:
         reduction_df = pd.DataFrame(reduction_rows)
 
         loc_summary_df = pd.DataFrame(loc_rows)
+        functionality_df = self._read_functionality_data()
 
         if not loc_summary_df.empty:
             loc_summary_df = (
@@ -165,16 +174,78 @@ class SecurityDataAggregator:
 
         with pd.ExcelWriter(self.output_file, engine="openpyxl") as writer:
             summary_df.to_excel(writer, sheet_name="summary", index=False)
+
             reduction_df.to_excel(
                 writer, sheet_name="reduction_rate_density", index=False
             )
+
             loc_summary_df.to_excel(
                 writer, sheet_name="Average Generated LOC", index=False
             )
 
+            if not functionality_df.empty:
+                functionality_df.to_excel(
+                    writer, sheet_name="functionality", index=False
+                )
+
         self._format_excel()
 
         print(f"Success! Summary saved at: {self.output_file}")
+
+    def _read_functionality_data(self):
+        rows = []
+
+        if not self.functionality_dir.exists():
+            return pd.DataFrame()
+
+        for root, _, files in os.walk(self.functionality_dir):
+            rel_path = os.path.relpath(root, self.functionality_dir)
+            parts = rel_path.split(os.sep)
+
+            if len(parts) < 3:
+                continue
+
+            dataset = parts[0]
+            model = parts[1]
+            technique = self._normalize_technique(parts[2])
+
+            for file in files:
+                if not file.endswith(".txt"):
+                    continue
+
+                full_path = Path(root) / file
+
+                try:
+                    with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
+                        content = f.read()
+                        match = self.PASS1_RE.search(content)
+
+                        if match:
+                            rows.append(
+                                {
+                                    "dataset": dataset,
+                                    "model": model,
+                                    "technique": technique,
+                                    "pass@1": float(match.group(1)),
+                                }
+                            )
+                except:
+                    pass
+
+        df = pd.DataFrame(rows)
+
+        if df.empty:
+            return df
+
+        df = (
+            df.groupby(["dataset", "model", "technique"])["pass@1"]
+            .mean()
+            .reset_index()
+        )
+
+        df["pass@1"] = df["pass@1"].apply(self._truncate4)
+
+        return df
 
 
 if __name__ == "__main__":
