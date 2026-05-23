@@ -326,8 +326,13 @@ class SecurityMetricsConsolidator:
         
         for entry in self.data:
             # Find matching runtime entry
+            dataset = entry.get('dataset') or entry.get('database')
+            if dataset is None:
+                print(f"missing dataset: {entry}")
+                continue
+
             match = runtime_df[
-                (runtime_df['database'] == entry['dataset']) &
+                (runtime_df['database'] == dataset) &
                 (runtime_df['model'] == entry['model']) &
                 (runtime_df['method'] == entry['method']) &
                 (runtime_df['run_number'] == entry['run_number'])
