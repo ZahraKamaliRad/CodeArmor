@@ -142,7 +142,7 @@ def main():
     parser.add_argument("--file", required=True)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--iterations", type=int, default=None)
-    parser.add_argument("--provider", choices=["api", "local"], required=True)
+    parser.add_argument("--provider", choices=["api", "local", "api2"], required=True)
 
     args = parser.parse_args()
 
