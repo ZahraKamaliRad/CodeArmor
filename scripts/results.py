@@ -108,18 +108,26 @@ class SecurityMetricsConsolidator:
                         
         return metrics
 
-    def extract_method_info(self, method_dir_name: str) -> Tuple[str, int]:
+    def extract_method_info(self, method_dir_name: str) -> Tuple[str, int, int]:
         """Extract method name and run number from directory name."""
         # Handle cases like 'direct(2)' - extract run number in parentheses
         paren_match = re.search(r'\((\d+)\)$', method_dir_name)
+        iter_match = re.search(r'_iter(\d)', method_dir_name)
+
+        if iter_match:
+            iter_count = int(iter_match.group(1))
+        else:
+            iter_count = 0
+
         if paren_match:
             run_num = int(paren_match.group(1))
             method = method_dir_name[:paren_match.start()]
-            return method, run_num
-        
+            
+            return method, run_num, iter_count
+
         # For all other cases, keep the full name as the method
         # This preserves rci_iter1, self_refine_iter2, etc.
-        return method_dir_name, 1
+        return method_dir_name, 1, iter_count
     
     def collect_data(self):
         """Traverse the input directory and collect all metrics."""
@@ -139,7 +147,7 @@ class SecurityMetricsConsolidator:
                     if not method_dir.is_dir():
                         continue
                     
-                    method_name, run_num = self.extract_method_info(method_dir.name)
+                    method_name, run_num, iter_count = self.extract_method_info(method_dir.name)
                     
                     # Handle special case for one_shot directory structure
                     if method_name == 'one_shot':
@@ -150,6 +158,7 @@ class SecurityMetricsConsolidator:
                                 metrics['database'] = database
                                 metrics['model'] = model
                                 metrics['method'] = sub_method
+                                metrics['iterations'] = iter_count
                                 metrics['run_number'] = run_num
                                 metrics['method_dir'] = method_dir.name
                                 self.data.append(metrics)
@@ -161,12 +170,13 @@ class SecurityMetricsConsolidator:
                                 self.collect_details_result(details_file, database, model, sub_method, run_num)
                     else:
                         # Standard structure
-                        metrics_file = method_dir / 'rate' / 'vuln_density' / 'SALLM_metrics.txt'
+                        metrics_file = method_dir / 'rate' / 'vuln_density' / f'{database}_metrics.txt'
                         if metrics_file.exists():
                             metrics = self.parse_metrics_file(metrics_file)
                             metrics['database'] = database
                             metrics['model'] = model
                             metrics['method'] = method_name
+                            metrics['iterations'] = iter_count
                             metrics['run_number'] = run_num
                             metrics['method_dir'] = method_dir.name
                             self.data.append(metrics)
@@ -326,8 +336,13 @@ class SecurityMetricsConsolidator:
         
         for entry in self.data:
             # Find matching runtime entry
+            dataset = entry.get('database')
+            if dataset is None:
+                print(f"missing dataset: {entry}")
+                continue
+
             match = runtime_df[
-                (runtime_df['database'] == entry['dataset']) &
+                (runtime_df['database'] == dataset) &
                 (runtime_df['model'] == entry['model']) &
                 (runtime_df['method'] == entry['method']) &
                 (runtime_df['run_number'] == entry['run_number'])
@@ -354,6 +369,8 @@ class SecurityMetricsConsolidator:
                         'avg_total_tokens_per_task']:
                     if col in row and pd.notna(row[col]):
                         entry[col] = row[col]
+            else:
+                print(f'WARNING: entry {dataset} / {entry["model"]} / {entry["method"]} / {entry["run_number"]} not found')
     
     def create_summary_report(self):
         """Create a comprehensive summary report."""
