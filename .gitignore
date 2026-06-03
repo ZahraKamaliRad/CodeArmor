@@ -237,7 +237,13 @@ scripts/plots/**
 
 src/retrieval/build_retrieval_examples.py
 src/retrieval/retrieval_dataset_stats.py
-
+scripts/tables.tex
+scripts/tables.tex
+scripts/latex_table.py
+scripts/compare_planning_mrthod.py
+scripts/clean_old_semgrep_jsonl.py
+scripts/latex_table.py
+scripts/clean_old_semgrep_jsonl.py
 semgrep-rule/**
 
 __pycache__/**
