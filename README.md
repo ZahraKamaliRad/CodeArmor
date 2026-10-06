@@ -38,7 +38,7 @@ Expand-Archive -Path semgrep-rule.zip -DestinationPath .
 ## 2. Configuration Setup
 
 ### A. Environment Variables (`.env`)
-Create a `.env` file in the `secure_codegenration` root (or adapt from `windows.env` / `linux.env`):
+Create a `.env` file in the `secure_code_generation` root (or adapt from `windows.env` / `linux.env`):
 
 ```ini
 # Path to extracted Semgrep rules
